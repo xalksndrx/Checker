@@ -1,0 +1,61 @@
+{
+  "name": "llm-checker",
+  "version": "3.5.11",
+  "description": "Single-purpose local LLM setup checker driven by hardware detection and guide rules",
+  "bin": {
+    "llm-checker": "bin/checker.js"
+  },
+  "main": "bin/checker.js",
+  "scripts": {
+    "test": "node bin/checker.js --simulate phone_mid --no-verbose",
+    "dev": "node bin/checker.js",
+    "start": "node bin/checker.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "systeminformation": "^5.31.1"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "llm",
+    "local-llm",
+    "model-recommendation",
+    "hardware-analysis",
+    "hardware",
+    "cli",
+    "inference",
+    "gpu",
+    "vram",
+    "performance",
+    "benchmark",
+    "apple-silicon",
+    "guide-driven",
+    "huggingface"
+  ],
+  "author": "Pavelevich (https://github.com/Pavelevich)",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pavelevich/llm-checker.git"
+  },
+  "homepage": "https://github.com/Pavelevich/llm-checker#readme",
+  "engines": {
+    "node": ">=16.0.0",
+    "npm": ">=8.0.0"
+  },
+  "os": [
+    "android",
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "guide.md",
+    "benchmark.md",
+    "install.md",
+    "LICENSE"
+  ]
+}
