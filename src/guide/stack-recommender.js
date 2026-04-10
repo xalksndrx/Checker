@@ -264,6 +264,194 @@ function buildAlternatives(policy = {}, context = {}, primary = {}) {
     return alternatives.filter((item) => item.name !== primary.name);
 }
 
+function getMatchingAlternativeCandidates(policy = {}, context = {}) {
+    return (policy.rules?.alternatives || [])
+        .filter((rule) => matchesCriteria(rule.when, context))
+        .flatMap((rule) => Array.isArray(rule.value) ? rule.value : []);
+}
+
+function dedupeModels(models = []) {
+    const seen = new Set();
+    const deduped = [];
+
+    models.forEach((model) => {
+        if (!model?.name) return;
+        const key = `${model.name}::${model.format || ''}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        deduped.push(model);
+    });
+
+    return deduped;
+}
+
+function matchesExpectedLoosely(expected, actual) {
+    if (expected === undefined) return true;
+
+    if (Array.isArray(expected)) {
+        return expected.includes(actual);
+    }
+
+    return expected === actual;
+}
+
+function ruleIsCompatible(rule = {}, context = {}) {
+    const when = rule.when || {};
+    const compatibleKeys = ['engine', 'useCase', 'isPhone', 'isApple', 'isLinux', 'isWindows', 'isNvidia', 'isAMD', 'cpuOnly'];
+
+    return compatibleKeys.every((key) => matchesExpectedLoosely(when[key], context[key]));
+}
+
+function getGuideModelCandidates(policy = {}, context = {}) {
+    const models = (policy.rules?.model || [])
+        .filter((rule) => ruleIsCompatible(rule, context))
+        .map((rule) => pickUseCaseValue(rule.value, context.useCase))
+        .filter((model) => model?.name);
+
+    return dedupeModels(models);
+}
+
+function getQuantizationFactor(format = '') {
+    const text = String(format || '').toLowerCase();
+    if (text.includes('q5')) return 0.65;
+    if (text.includes('q6')) return 0.78;
+    if (text.includes('q8')) return 1.0;
+    if (text.includes('4-bit') || text.includes('q4') || text.includes('4.0bpw') || text.includes('reap') || text.includes('awq')) return 0.55;
+    if (text.includes('mlx')) return 0.58;
+    return 0.8;
+}
+
+function estimateWorkingSetGB(model = {}) {
+    const modelSizeB = estimateModelSizeB(model);
+    const quantFactor = getQuantizationFactor(model.format);
+    const overhead = modelSizeB >= 32 ? 3 : 2;
+    return Number((modelSizeB * quantFactor + overhead).toFixed(1));
+}
+
+function getBudgetGB(context = {}) {
+    if (context.engine === 'mlx') return Number(context.totalRam || context.effectiveMemory || 0);
+    return Number(context.effectiveMemory || context.vram || context.totalRam || 0);
+}
+
+function getUseCaseAffinity(model = {}, useCase = 'general') {
+    const text = `${model.name || ''} ${model.family || ''}`.toLowerCase();
+    const isCoder = text.includes('coder');
+    const isInstruct = text.includes('instruct');
+
+    if (useCase === 'coding') {
+        if (isCoder) return 12;
+        if (isInstruct) return 3;
+        return 0;
+    }
+
+    if (useCase === 'agentic') {
+        if (isCoder) return 5;
+        if (isInstruct) return 8;
+        return 8;
+    }
+
+    if (useCase === 'general') {
+        if (isInstruct) return 8;
+        if (isCoder) return 2;
+        return 8;
+    }
+
+    return 4;
+}
+
+function getSourcePreference(model = {}) {
+    const text = `${model.name || ''} ${model.source || ''}`.toLowerCase();
+    return text.includes('0xsero') ? 12 : 0;
+}
+
+function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
+    const budgetGB = Math.max(0, getBudgetGB(context));
+    const workingSetGB = estimateWorkingSetGB(model);
+    const modelSizeB = estimateModelSizeB(model);
+    const useCaseAffinity = getUseCaseAffinity(model, context.useCase);
+    const sourcePreference = getSourcePreference(model);
+    const sizeScore = Math.min(modelSizeB, 72) / 2;
+    const pressureRatio = budgetGB > 0 ? workingSetGB / budgetGB : 99;
+
+    let fitScore = 12;
+    let fitLabel = 'comfortable';
+
+    if (pressureRatio > 0.95) {
+        fitScore = -40;
+        fitLabel = 'clear loser on fit';
+    } else if (pressureRatio > 0.85) {
+        fitScore = -12;
+        fitLabel = 'tight';
+    } else if (pressureRatio > 0.72) {
+        fitScore = -4;
+        fitLabel = 'workable with little headroom';
+    }
+
+    const score = Number((sizeScore + useCaseAffinity + sourcePreference + fitScore + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
+
+    return {
+        ...model,
+        estimatedSizeB: modelSizeB,
+        estimatedWorkingSetGB: workingSetGB,
+        score,
+        pressureRatio,
+        fitLabel
+    };
+}
+
+function rankModelCandidates(policy = {}, context = {}, primary = {}) {
+    const candidates = dedupeModels([
+        primary,
+        ...getGuideModelCandidates(policy, context),
+        ...getMatchingAlternativeCandidates(policy, context)
+    ]);
+
+    return candidates
+        .map((model) => scoreModelCandidate(model, context, primary.name))
+        .sort((left, right) => right.score - left.score);
+}
+
+function buildFrontierComparison(model = {}, context = {}) {
+    const sizeB = estimateModelSizeB(model);
+    const workingSetGB = estimateWorkingSetGB(model);
+    const useCase = context.useCase || 'general';
+    const leader = useCase === 'coding' || useCase === 'agentic'
+        ? 'Claude Opus 4.6 / GPT-5.4'
+        : 'GPT-5.4 / Claude Opus 4.6';
+
+    let closest = 'below GPT-4-class';
+    let summary = `This local pick is well below ${leader} and should not be treated as frontier-cloud-equivalent.`;
+
+    if (sizeB >= 28 || workingSetGB >= 18) {
+        closest = 'best case: GPT-4o-class on narrower tasks';
+        summary = `This is a strong open local tier that may feel GPT-4o-class on narrower tasks, but it remains below ${leader} on hard multi-step work.`;
+    } else if (sizeB >= 12) {
+        closest = 'roughly GPT-4-era usefulness on narrower work';
+        summary = `This should be thought of as practical local GPT-4-era usefulness on narrower tasks, not as a peer to ${leader}.`;
+    }
+
+    return {
+        leader,
+        closest,
+        summary,
+        inference: 'Inference from open-model class, size, and fit heuristics rather than direct benchmark equivalence.'
+    };
+}
+
+function buildModelReason(selectedModel = {}, primaryModel = {}, selectionContext = {}) {
+    if (selectedModel.reason) return selectedModel.reason;
+
+    if (selectedModel.name === primaryModel.name) {
+        return 'This model stayed ahead after scoring fit, use-case alignment, and source preference across the compatible shortlist.';
+    }
+
+    if (`${selectedModel.name} ${selectedModel.source || ''}`.toLowerCase().includes('0xsero')) {
+        return 'A fitting 0xSero build outranked the conservative default once shortlist scoring and source preference were applied.';
+    }
+
+    return `This alternative outranked the conservative default for ${selectionContext.useCase || 'the current'} work once shortlist scoring was applied.`;
+}
+
 function chooseEngine(policy = {}, context = {}) {
     const rule = chooseRule(policy.rules?.engine || [], context);
     if (!rule) {
@@ -304,12 +492,21 @@ function chooseModel(policy = {}, context = {}) {
         throw new Error(`No model rule matched from ${GUIDE_SOURCE}`);
     }
 
-    const model = pickUseCaseValue(rule.value, context.useCase);
-    if (!model || !model.name) {
+    const primaryModel = pickUseCaseValue(rule.value, context.useCase);
+    if (!primaryModel || !primaryModel.name) {
         throw new Error(`Invalid model rule in ${GUIDE_SOURCE}`);
     }
 
-    return model;
+    const rankedCandidates = rankModelCandidates(policy, context, primaryModel);
+    if (rankedCandidates.length === 0) {
+        throw new Error(`Could not rank model candidates from ${GUIDE_SOURCE}`);
+    }
+
+    return {
+        selected: rankedCandidates[0],
+        primary: primaryModel,
+        rankedCandidates
+    };
 }
 
 function getGuideStackRecommendation(hardware = {}, options = {}) {
@@ -325,12 +522,16 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         engine: engine.key,
         harness: harness.name
     };
-    const model = chooseModel(policy, selectionContext);
+    const modelChoice = chooseModel(policy, selectionContext);
+    const model = modelChoice.selected;
     const contextWindow = estimateContextWindow(policy, selectionContext);
     const performance = estimatePerformance(hardware, model, contextWindow);
     const links = buildLinks(policy, engine, harness, model);
-    const alternatives = buildAlternatives(policy, selectionContext, model);
+    const alternatives = modelChoice.rankedCandidates
+        .filter((item) => item.name !== model.name)
+        .slice(0, 4);
     const notes = buildNotes(policy, selectionContext);
+    const frontierComparison = buildFrontierComparison(model, selectionContext);
 
     return {
         guideVersion: policy.version || 'unknown',
@@ -344,9 +545,12 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         engine,
         harness,
         model,
+        primaryModel: modelChoice.primary,
+        candidates: modelChoice.rankedCandidates,
         alternatives,
         performance,
         links,
+        frontierComparison,
         endpoint: engine.key === 'mlx' ? 'http://localhost:8000/v1 (bridge or compatible adapter)' : 'http://localhost:8000/v1',
         commands: buildCommands(policy, engine, model, harness),
         notes,
@@ -360,8 +564,11 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         },
         rationale: [
             engine.reason,
-            model.reason,
-            harness.reason
+            buildModelReason(model, modelChoice.primary, selectionContext),
+            harness.reason,
+            model.name !== modelChoice.primary.name
+                ? `Picked from a scored Hugging Face shortlist instead of the conservative default; 0xSero gets a preference bonus unless fit or use-case makes it a clear loser.`
+                : `Scored against the compatible Hugging Face shortlist and still won on fit, use-case, and source preference.`
         ]
     };
 }

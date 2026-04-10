@@ -149,18 +149,19 @@ function displayRecommendation(recommendation) {
         chalk.green('│') +
         ` Perf: ~${chalk.white.bold(recommendation.performance.tokensPerSecond + ' tok/s')} ${chalk.gray(`| first token ~${recommendation.performance.firstTokenSeconds}s | context ~${recommendation.performance.contextWindow}`)}`
     );
+    console.log(chalk.green('│') + ` Cloud Ref: ${chalk.cyan(recommendation.frontierComparison.closest)} ${chalk.gray(`| frontier leader: ${recommendation.frontierComparison.leader}`)}`);
     console.log(chalk.green('│') + ` Endpoint: ${chalk.yellow(recommendation.endpoint)}`);
     console.log(chalk.green('│') + ` Serve: ${chalk.gray(recommendation.commands.serve)}`);
     console.log(chalk.green('│') + ` Attach: ${chalk.gray(recommendation.commands.attach)}`);
 
     if (Array.isArray(recommendation.alternatives) && recommendation.alternatives.length > 0) {
-        console.log(chalk.green('│') + ` HF Alts: ${chalk.gray(recommendation.alternatives.slice(0, 2).map((item) => item.name).join(' | '))}`);
+        console.log(chalk.green('│') + ` HF Rank: ${chalk.gray(recommendation.alternatives.slice(0, 2).map((item) => `${item.name} [${item.score}]`).join(' | '))}`);
     }
 
-    recommendation.rationale.slice(0, 2).forEach((line) => {
+    recommendation.rationale.slice(0, 3).forEach((line) => {
         console.log(chalk.green('│') + ` Why: ${chalk.gray(line)}`);
     });
-    recommendation.notes.slice(0, 2).forEach((line) => {
+    [recommendation.frontierComparison.summary, ...recommendation.notes].slice(0, 2).forEach((line) => {
         console.log(chalk.green('│') + ` Note: ${chalk.gray(line)}`);
     });
     console.log(chalk.green('╰'));
@@ -179,6 +180,8 @@ function writeInstallMarkdown(recommendations = []) {
             `Estimated throughput: ~${recommendation.performance.tokensPerSecond} tok/s`,
             `Estimated first token: ~${recommendation.performance.firstTokenSeconds} s`,
             `Suggested context: ~${recommendation.performance.contextWindow} tokens`,
+            `Cloud reference: ${recommendation.frontierComparison.closest}`,
+            `Frontier leader: ${recommendation.frontierComparison.leader}`,
             '',
             'Links:',
             `- Engine: ${recommendation.links.engine || 'N/A'}`,
@@ -193,8 +196,15 @@ function writeInstallMarkdown(recommendations = []) {
             `# ${recommendation.commands.attach}`,
             '```',
             '',
+            'Why this pick:',
+            ...recommendation.rationale.slice(0, 4).map((line) => `- ${line}`),
+            '',
+            'Comparison note:',
+            `- ${recommendation.frontierComparison.summary}`,
+            `- ${recommendation.frontierComparison.inference}`,
+            '',
             alternatives.length > 0 ? 'Alternatives:' : '',
-            ...alternatives.slice(0, 3).map((item) => `- ${item.name} (${item.format}, ${item.source})`)
+            ...alternatives.slice(0, 4).map((item) => `- ${item.name} (${item.format}, ${item.source}, score ${item.score}, fit ${item.fitLabel})`)
         ].filter(Boolean).join('\n');
     }).join('\n\n');
 
