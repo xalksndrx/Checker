@@ -35,6 +35,7 @@ Interpretation rules:
 - system RAM matters for downloads, staging, CPU-first inference, and comfort
 - VRAM is still the main constraint on dedicated-GPU systems
 - do not confuse large system RAM with large effective inference memory on a 24 GB GPU
+- on a dedicated NVIDIA box, large system RAM should improve staging and optional offload experiments, but it should not upgrade the baseline model lane beyond what fits in VRAM
 - long context is limited by KV cache pressure, not just whether weights fit
 
 Practical VRAM rules of thumb:
@@ -42,6 +43,7 @@ Practical VRAM rules of thumb:
 - under 16 GB VRAM: stay in smaller models or use heavier offload
 - 24 GB VRAM: treat 7B to 14B dense models as the safe baseline
 - 24 GB VRAM: larger quantized or pruned MoE models are experiments, not the default baseline
+- 24 GB VRAM: the first recommended model should fit without CPU weight offload or other rescue-path tricks
 - 48 GB+ effective GPU memory on Linux: opens the door to larger vLLM serving targets
 - Apple Silicon: treat unified memory differently and prefer MLX first
 
@@ -127,6 +129,7 @@ Use them with discipline:
 
 - 24 GB single GPU baseline: 7B to 14B dense models
 - 24 GB single GPU experiments: larger quantized or pruned MoE models, with conservative context
+- do not treat a pruned REAP release as a 4-bit quant unless the model card explicitly says a real low-bit quant such as `W4A16`, `AWQ`, or `4-bit`
 - lower-memory or CPU-first systems: smaller GGUF models
 - BF16 / FP16: only when hardware actually supports it comfortably
 
@@ -443,11 +446,11 @@ The tool reads the JSON block below at runtime. Update this block when you want 
         "when": { "engine": "vllm", "isNvidia": true, "vram": { "gte": 20 }, "useCase": ["agentic", "general"] },
         "value": {
           "default": {
-            "name": "Qwen/Qwen3.5-14B-Instruct",
-            "format": "AWQ 4-bit or native vLLM-supported quant",
-            "family": "Qwen3.5",
-            "source": "Hugging Face",
-            "reason": "A 24GB NVIDIA baseline should start in the 14B class before testing larger MoE variants."
+            "name": "Qwen/Qwen3-14B-AWQ",
+            "format": "AWQ 4-bit",
+            "family": "Qwen3",
+            "source": "Qwen on Hugging Face",
+            "reason": "A 24GB NVIDIA baseline should start with an officially quantized 14B model that fits without offload."
           }
         }
       },
@@ -455,11 +458,11 @@ The tool reads the JSON block below at runtime. Update this block when you want 
         "when": { "engine": "vllm", "isNvidia": true, "vram": { "gte": 20 }, "useCase": "coding" },
         "value": {
           "default": {
-            "name": "Qwen/Qwen3-Coder-14B",
-            "format": "AWQ 4-bit or native vLLM-supported quant",
-            "family": "Qwen3-Coder",
-            "source": "Hugging Face",
-            "reason": "A 24GB NVIDIA coding baseline should start with a conservative 14B-class model."
+            "name": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
+            "format": "AWQ 4-bit",
+            "family": "Qwen2.5-Coder",
+            "source": "Qwen on Hugging Face",
+            "reason": "A 24GB NVIDIA coding baseline should start with an officially quantized 14B coder model."
           }
         }
       },
@@ -659,7 +662,7 @@ The tool reads the JSON block below at runtime. Update this block when you want 
         "when": { "engine": "vllm", "vram": { "gte": 20 } },
         "value": [
           { "name": "Qwen/Qwen3.5-7B-Instruct", "format": "AWQ 4-bit", "source": "Hugging Face" },
-          { "name": "0xSero/Qwen-3.5-28B-A3B-REAP", "format": "REAP 4-bit", "source": "0xSero on Hugging Face" }
+          { "name": "0xSero/Qwen-3.5-28B-A3B-REAP", "format": "REAP pruned bf16 weights", "source": "0xSero on Hugging Face" }
         ]
       },
       {

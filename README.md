@@ -18,7 +18,9 @@ That single run prints:
 - engine
 - harness
 - primary Hugging Face model
-- Hugging Face alternatives
+- top ranked 3-5 model choices for each lane
+- run labels such as `confirmed`, `likely`, `experimental`, or `format mismatch`
+- tradeoff notes for quality, speed, fit, and context headroom
 - estimated `tok/s`
 - estimated first-token latency
 - suggested context window
@@ -57,6 +59,36 @@ Override with custom hardware values:
 node bin/checker.js --gpu "RTX 4090" --ram 64 --cpu "Ryzen 9 7950X" --vram 24
 ```
 
+Compare explicit model links or repo IDs against the current machine:
+
+```bash
+node bin/checker.js --use-case general \
+  --models https://huggingface.co/Qwen/Qwen3-14B-AWQ,https://huggingface.co/OBLITERATUS/gemma-4-E4B-it-OBLITERATED
+```
+
+Or repeat `--model`:
+
+```bash
+node bin/checker.js --use-case coding \
+  --model Qwen/Qwen2.5-Coder-14B-Instruct-AWQ \
+  --model https://huggingface.co/Qwen/Qwen3-Coder-7B
+```
+
+Limit the recommendation list:
+
+```bash
+node bin/checker.js --top 5
+```
+
+That comparison mode:
+
+- fetches Hugging Face repo metadata when possible
+- estimates parameter count and working-set size
+- checks fit against the detected hardware
+- ranks the provided models using the same Checker fit logic
+- prints context and performance tradeoffs for the compared set
+- does not rewrite `install.md`
+
 ## How It Works
 
 `checker.js` is the whole product surface.
@@ -65,11 +97,13 @@ It:
 
 1. detects hardware
 2. applies the rules in [`guide.md`](./guide.md)
-3. chooses engine, harness, and model for `agentic`, `coding`, and `general`
-4. estimates expected performance
-5. writes [`install.md`](./install.md)
+3. chooses engine and harness for `agentic`, `coding`, and `general`
+4. discovers and ranks candidate models from Hugging Face when possible, with seeded fallback candidates when offline
+5. prefers 0xSero models when they fit well, but keeps the ranking open to the broader Hugging Face pool
+6. estimates expected performance and context tradeoffs
+7. writes [`install.md`](./install.md)
 
-The recommendations are guide-driven and hardware-aware. They are not limited to 0xSero models, but 0xSero Hugging Face releases are preferred when the guide logic says they are the best fit.
+The recommendations are guide-driven and hardware-aware. They are not limited to 0xSero models. 0xSero Hugging Face releases still get a preference boost when they fit the hardware well, but they no longer crowd out stronger options from the wider Hugging Face pool.
 
 ## Performance Output
 
@@ -85,4 +119,7 @@ Every run rewrites [`install.md`](./install.md) with:
 - install command
 - model fetch command
 - serve command
+- top ranked alternatives
+- run-suitability labels
+- tradeoff summaries
 - sections for `agentic`, `coding`, and `general`

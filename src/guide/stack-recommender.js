@@ -58,11 +58,15 @@ function getSignals(hardware = {}, options = {}) {
     const gpuVendor = String(gpu.vendor || '').trim();
     const cpuBrand = String(cpu.brand || '').trim();
     const systemModel = String(system.model || '').trim();
-    const totalRam = asNumber(memory.total, summary.systemRAM, summary.effectiveMemory);
+    const totalRam = asNumber(memory.total, summary.systemRAM);
     const vram = asNumber(gpu.vram, summary.totalVRAM);
+    const hasDedicatedGpu = Boolean(summary.hasDedicatedGPU || gpu.dedicated || (vram > 0 && !gpu.unified));
     const effectiveMemory = asNumber(
+        gpu.unified
+            ? summary.effectiveMemory
+            : undefined,
+        hasDedicatedGpu ? vram : undefined,
         summary.effectiveMemory,
-        gpu.unified ? totalRam : vram,
         totalRam
     );
     const gpuCount = asNumber(gpu.gpuCount, Array.isArray(gpu.all) ? gpu.all.length : 0, gpu.model ? 1 : 0);
@@ -75,8 +79,6 @@ function getSignals(hardware = {}, options = {}) {
     const isNvidia = includesAny(combinedGpuText, ['nvidia', 'geforce', 'rtx', 'gtx', 'quadro', 'tesla', 'a100', 'h100', 'a6000', 'rtx 6000']);
     const isAMD = includesAny(combinedGpuText, ['amd', 'radeon', 'instinct', 'rx ']);
     const isIntelGpu = includesAny(combinedGpuText, ['intel', 'arc', 'iris', 'uhd']);
-    const hasDedicatedGpu = Boolean(summary.hasDedicatedGPU || gpu.dedicated || (vram > 0 && !gpu.unified));
-
     return {
         platform,
         rawPlatform,
@@ -149,16 +151,16 @@ function matchesValue(actual, expected) {
 function matchesCriteria(criteria = {}, context = {}) {
     if (!criteria || Object.keys(criteria).length === 0) return true;
 
-    if (Array.isArray(criteria.all)) {
-        return criteria.all.every((item) => matchesCriteria(item, context));
+    if (Array.isArray(criteria.all) && !criteria.all.every((item) => matchesCriteria(item, context))) {
+        return false;
     }
 
-    if (Array.isArray(criteria.any)) {
-        return criteria.any.some((item) => matchesCriteria(item, context));
+    if (Array.isArray(criteria.any) && !criteria.any.some((item) => matchesCriteria(item, context))) {
+        return false;
     }
 
-    if (criteria.not) {
-        return !matchesCriteria(criteria.not, context);
+    if (criteria.not && matchesCriteria(criteria.not, context)) {
+        return false;
     }
 
     return Object.entries(criteria).every(([key, expected]) => {
@@ -199,6 +201,112 @@ function fillTemplate(template, model = {}, harness = {}) {
     return String(template || '').replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] || '');
 }
 
+function extractModelId(input = '') {
+    const text = String(input || '').trim();
+    if (!text) return '';
+
+    const hfPrefix = 'https://huggingface.co/';
+    if (text.startsWith(hfPrefix)) {
+        const withoutPrefix = text.slice(hfPrefix.length).split(/[?#]/)[0];
+        const parts = withoutPrefix.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+            return `${parts[0]}/${parts[1]}`;
+        }
+    }
+
+    return text.replace(/^hf:\/\//i, '').split(/[?#]/)[0];
+}
+
+function inferModelFamily(modelId = '', metadata = {}) {
+    const configType = String(metadata?.config?.model_type || '').trim();
+    if (configType) return configType;
+
+    const lower = String(modelId || '').toLowerCase();
+    if (lower.includes('coder')) return 'coder';
+    if (lower.includes('qwen')) return 'qwen';
+    if (lower.includes('gemma')) return 'gemma';
+    if (lower.includes('kimi')) return 'kimi';
+    return 'model';
+}
+
+function inferModelFormat(modelId = '', metadata = {}) {
+    const lower = String(modelId || '').toLowerCase();
+    const tags = Array.isArray(metadata?.tags) ? metadata.tags.map((tag) => String(tag).toLowerCase()) : [];
+    const quantMethod = String(metadata?.config?.quantization_config?.quant_method || '').toLowerCase();
+    const bits = Number(metadata?.config?.quantization_config?.bits);
+    const safetensorTypes = Object.keys(metadata?.safetensors?.parameters || {}).map((key) => String(key).toUpperCase());
+    const ggufQuantMatch = lower.match(/\b(i?q\d(?:_[a-z0-9]+)+)\b/i);
+    const exl2Match = lower.match(/\b(\d+(?:\.\d+)?)bpw\b/i);
+
+    if (quantMethod === 'awq' || tags.includes('awq')) {
+        if (Number.isFinite(bits) && bits > 0) return `AWQ ${bits}-bit`;
+        return 'AWQ 4-bit';
+    }
+    if (lower.includes('awq')) return 'AWQ 4-bit';
+    if (lower.includes('gptq') || tags.includes('gptq')) return 'GPTQ 4-bit';
+    if (lower.includes('w4a16') || lower.includes('autoround') || lower.includes('4bit') || lower.includes('4-bit')) {
+        return 'W4A16 / 4-bit';
+    }
+    if (lower.includes('exl2') || tags.includes('exl2')) {
+        return exl2Match ? `EXL2 ${exl2Match[1]}bpw` : 'EXL2';
+    }
+    if (ggufQuantMatch) return `GGUF ${ggufQuantMatch[1].toUpperCase()}`;
+    if (tags.includes('gguf') || lower.includes('gguf')) return 'GGUF';
+    if (tags.includes('mlx') || lower.includes('mlx')) return 'MLX';
+    if (lower.includes('reap') && (lower.includes('w4a16') || tags.includes('4-bit') || tags.includes('awq'))) {
+        return 'REAP + low-bit quant';
+    }
+    if (lower.includes('reap')) return 'REAP pruned bf16/f16 weights';
+    if (safetensorTypes.includes('F16')) return 'F16';
+    if (safetensorTypes.includes('BF16')) return 'BF16';
+    if (tags.includes('4-bit')) return '4-bit quant';
+    return 'native weights';
+}
+
+function inferModelSource(modelId = '', metadata = {}) {
+    const author = String(metadata?.author || '').trim();
+    if (author) return `${author} on Hugging Face`;
+    const namespace = String(modelId || '').split('/')[0] || 'Hugging Face';
+    return `${namespace} on Hugging Face`;
+}
+
+function getModelCautionFlags(modelId = '', metadata = {}) {
+    const haystack = [
+        String(modelId || ''),
+        ...(Array.isArray(metadata?.tags) ? metadata.tags : []),
+        String(metadata?.cardData?.base_model || '')
+    ].join(' ').toLowerCase();
+
+    const flags = [];
+    if (haystack.includes('uncensored')) flags.push('uncensored');
+    if (haystack.includes('abliterated') || haystack.includes('obliterated')) flags.push('abliterated');
+    if (haystack.includes('refusal-removal')) flags.push('refusal-removal');
+    return flags;
+}
+
+function buildModelCandidate(input = '', metadata = {}) {
+    const modelId = extractModelId(input || metadata?.id || metadata?.modelId || '');
+    const paramsTotal = Number(metadata?.safetensors?.total);
+    const paramsB = Number.isFinite(paramsTotal) && paramsTotal > 0
+        ? Number((paramsTotal / 1e9).toFixed(1))
+        : undefined;
+
+    return {
+        name: modelId,
+        format: inferModelFormat(modelId, metadata),
+        family: inferModelFamily(modelId, metadata),
+        source: inferModelSource(modelId, metadata),
+        paramsB,
+        tags: Array.isArray(metadata?.tags) ? metadata.tags : [],
+        cautionFlags: getModelCautionFlags(modelId, metadata),
+        downloads: Number(metadata?.downloads || 0),
+        likes: Number(metadata?.likes || 0),
+        lastModified: metadata?.lastModified || null,
+        author: String(metadata?.author || '').trim(),
+        metadata
+    };
+}
+
 function buildCommands(policy = {}, engine = {}, model = {}, harness = {}) {
     const enginePolicy = (policy.engines || {})[engine.key] || {};
     const commandTemplates = enginePolicy.commands || {};
@@ -212,7 +320,13 @@ function buildCommands(policy = {}, engine = {}, model = {}, harness = {}) {
 }
 
 function estimateModelSizeB(model = {}) {
+    if (Number.isFinite(Number(model.paramsB)) && Number(model.paramsB) > 0) {
+        return Number(model.paramsB);
+    }
+
     const text = `${model.name || ''} ${model.family || ''}`;
+
+    if (/gemma-4-e4b/i.test(text)) return 8;
     const match = text.match(/(\d+(?:\.\d+)?)B/i);
     if (match) return Number(match[1]);
 
@@ -224,6 +338,38 @@ function estimateModelSizeB(model = {}) {
     return 9;
 }
 
+function estimateActiveModelSizeB(model = {}) {
+    const text = `${model.name || ''} ${model.family || ''}`;
+    const lower = text.toLowerCase();
+    const moeMatch = lower.match(/(\d+(?:\.\d+)?)b-a(\d+(?:\.\d+)?)b/i);
+    if (moeMatch) {
+        return Number(moeMatch[2]);
+    }
+
+    const eMatch = lower.match(/\be(\d+(?:\.\d+)?)b\b/i);
+    if (eMatch) {
+        return Number(eMatch[1]);
+    }
+
+    return null;
+}
+
+function estimateQualityClassSizeB(model = {}) {
+    const total = estimateModelSizeB(model);
+    const active = estimateActiveModelSizeB(model);
+    if (!Number.isFinite(active) || active <= 0) return total;
+
+    return Number(Math.min(total, (active * 2) + (total * 0.4)).toFixed(1));
+}
+
+function estimateSpeedClassSizeB(model = {}) {
+    const total = estimateModelSizeB(model);
+    const active = estimateActiveModelSizeB(model);
+    if (!Number.isFinite(active) || active <= 0) return total;
+
+    return Number(Math.min(total, Math.max(active * 4, active + (total * 0.35))).toFixed(1));
+}
+
 function estimateContextWindow(policy = {}, context = {}) {
     const rules = policy.rules?.context || [];
     const match = chooseRule(rules, context);
@@ -231,7 +377,7 @@ function estimateContextWindow(policy = {}, context = {}) {
 }
 
 function estimatePerformance(hardware = {}, model = {}, contextWindow = 8192) {
-    const modelSizeB = estimateModelSizeB(model);
+    const modelSizeB = estimateSpeedClassSizeB(model);
     const estimate = estimateTokenSpeedFromHardware(hardware, { modelSizeB });
     const firstTokenSeconds = Number((Math.max(0.15, modelSizeB / Math.max(4, estimate.tokensPerSecond))).toFixed(2));
 
@@ -271,18 +417,39 @@ function getMatchingAlternativeCandidates(policy = {}, context = {}) {
 }
 
 function dedupeModels(models = []) {
-    const seen = new Set();
-    const deduped = [];
+    const byName = new Map();
 
     models.forEach((model) => {
         if (!model?.name) return;
-        const key = `${model.name}::${model.format || ''}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        deduped.push(model);
+
+        const existing = byName.get(model.name);
+        if (!existing) {
+            byName.set(model.name, model);
+            return;
+        }
+
+        const existingRichness = [
+            existing.format && existing.format !== 'native weights',
+            Number(existing.downloads || 0) > 0,
+            Number(existing.likes || 0) > 0,
+            Array.isArray(existing.tags) && existing.tags.length > 0,
+            Number(existing.paramsB || 0) > 0
+        ].filter(Boolean).length;
+
+        const nextRichness = [
+            model.format && model.format !== 'native weights',
+            Number(model.downloads || 0) > 0,
+            Number(model.likes || 0) > 0,
+            Array.isArray(model.tags) && model.tags.length > 0,
+            Number(model.paramsB || 0) > 0
+        ].filter(Boolean).length;
+
+        if (nextRichness > existingRichness) {
+            byName.set(model.name, { ...existing, ...model });
+        }
     });
 
-    return deduped;
+    return Array.from(byName.values());
 }
 
 function matchesExpectedLoosely(expected, actual) {
@@ -313,12 +480,14 @@ function getGuideModelCandidates(policy = {}, context = {}) {
 
 function getQuantizationFactor(format = '') {
     const text = String(format || '').toLowerCase();
-    if (text.includes('q5')) return 0.65;
+    if (text.includes('w4a16') || text.includes('4-bit') || text.includes('q4') || text.includes('4.0bpw') || text.includes('awq') || text.includes('gptq')) return 0.55;
+    if (text.includes('q5')) return 0.67;
     if (text.includes('q6')) return 0.78;
-    if (text.includes('q8')) return 1.0;
-    if (text.includes('4-bit') || text.includes('q4') || text.includes('4.0bpw') || text.includes('reap') || text.includes('awq')) return 0.55;
+    if (text.includes('q8')) return 0.95;
+    if (text.includes('reap')) return 1.9;
     if (text.includes('mlx')) return 0.58;
-    return 0.8;
+    if (text.includes('bf16') || text.includes('f16') || text.includes('fp16')) return 1.05;
+    return 1.0;
 }
 
 function estimateWorkingSetGB(model = {}) {
@@ -331,6 +500,19 @@ function estimateWorkingSetGB(model = {}) {
 function getBudgetGB(context = {}) {
     if (context.engine === 'mlx') return Number(context.totalRam || context.effectiveMemory || 0);
     return Number(context.effectiveMemory || context.vram || context.totalRam || 0);
+}
+
+function getHostOffloadHeadroomGB(context = {}) {
+    const totalRam = Number(context.totalRam || 0);
+    const vram = Number(context.vram || 0);
+    if (totalRam <= 0 || context.engine === 'mlx') return 0;
+
+    const reserve = context.isWindows ? 16 : 12;
+    const available = Math.max(0, totalRam - reserve - Math.max(0, vram * 0.25));
+
+    if (context.engine === 'vllm') return Math.min(28, Math.max(0, available * 0.35));
+    if (context.engine === 'llama.cpp') return Math.min(40, Math.max(0, available * 0.55));
+    return Math.min(24, Math.max(0, available * 0.4));
 }
 
 function getUseCaseAffinity(model = {}, useCase = 'general') {
@@ -361,49 +543,207 @@ function getUseCaseAffinity(model = {}, useCase = 'general') {
 
 function getSourcePreference(model = {}) {
     const text = `${model.name || ''} ${model.source || ''}`.toLowerCase();
-    return text.includes('0xsero') ? 12 : 0;
+    if (text.includes('0xsero')) return 9;
+    if (text.includes('qwen/') || text.includes('google/') || text.includes('meta-llama/')) return 3;
+    return 0;
+}
+
+function getPopularityPreference(model = {}) {
+    const downloads = Math.max(0, Number(model.downloads || 0));
+    const likes = Math.max(0, Number(model.likes || 0));
+    if (downloads <= 0 && likes <= 0) return 0;
+    return Math.min(6, Number((Math.log10(downloads + 10) + Math.log10((likes * 10) + 10) - 2).toFixed(1)));
+}
+
+function getEngineFormatPreference(model = {}, context = {}) {
+    const format = String(model.format || '').toLowerCase();
+    const engine = String(context.engine || '').toLowerCase();
+
+    if (engine === 'vllm') {
+        if (format.includes('gguf') || format.includes('mlx')) return -18;
+        if (format.includes('awq') || format.includes('gptq') || format.includes('w4a16') || format.includes('reap') || format.includes('native') || format.includes('bf16') || format.includes('f16')) return 6;
+        return 0;
+    }
+
+    if (engine === 'llama.cpp') {
+        if (format.includes('gguf')) return 8;
+        if (format.includes('mlx')) return -12;
+        return -16;
+    }
+
+    if (engine === 'mlx') {
+        if (format.includes('mlx')) return 8;
+        if (format.includes('gguf')) return -10;
+        return -4;
+    }
+
+    return 0;
+}
+
+function getFormatMismatchReason(model = {}, context = {}) {
+    const format = String(model.format || '').toLowerCase();
+    const engine = String(context.engine || '').toLowerCase();
+
+    if (engine === 'vllm' && (format.includes('gguf') || format.includes('mlx'))) {
+        return 'This build targets GGUF/MLX workflows rather than native vLLM serving.';
+    }
+
+    if (engine === 'llama.cpp' && !format.includes('gguf')) {
+        return 'This build is not a GGUF-first llama.cpp target.';
+    }
+
+    if (engine === 'mlx' && !format.includes('mlx')) {
+        return 'This build is not an MLX-native target.';
+    }
+
+    return '';
+}
+
+function classifyFit(model = {}, context = {}) {
+    const budgetGB = Math.max(0, getBudgetGB(context));
+    const workingSetGB = estimateWorkingSetGB(model);
+    const offloadHeadroomGB = getHostOffloadHeadroomGB(context);
+    const pressureRatio = budgetGB > 0 ? workingSetGB / budgetGB : 99;
+    const rescueRatio = (budgetGB + offloadHeadroomGB) > 0 ? workingSetGB / (budgetGB + offloadHeadroomGB) : 99;
+
+    if (pressureRatio <= 0.72) {
+        return { fitScore: 14, fitLabel: 'comfortable', pressureRatio, fitMode: 'gpu-resident' };
+    }
+    if (pressureRatio <= 0.9) {
+        return { fitScore: 9, fitLabel: 'balanced', pressureRatio, fitMode: 'gpu-resident' };
+    }
+    if (pressureRatio <= 1.0) {
+        return { fitScore: 3, fitLabel: 'tight', pressureRatio, fitMode: 'gpu-resident' };
+    }
+    if (rescueRatio <= 1.0) {
+        return { fitScore: -10, fitLabel: 'hybrid offload', pressureRatio, fitMode: 'hybrid-offload' };
+    }
+    if (rescueRatio <= 1.12) {
+        return { fitScore: -24, fitLabel: 'experimental offload', pressureRatio, fitMode: 'experimental-offload' };
+    }
+    return { fitScore: -42, fitLabel: 'clear loser on fit', pressureRatio, fitMode: 'poor-fit' };
+}
+
+function estimateCandidateContextWindow(policy = {}, context = {}, model = {}) {
+    const baseContext = estimateContextWindow(policy, context);
+    const fit = classifyFit(model, context);
+    const workingSetGB = estimateWorkingSetGB(model);
+    const budgetGB = Math.max(1, getBudgetGB(context));
+
+    if (fit.fitMode === 'experimental-offload') return Math.max(4096, Math.round(baseContext / 4));
+    if (fit.fitMode === 'hybrid-offload') return Math.max(8192, Math.round(baseContext / 2));
+    if (workingSetGB > budgetGB * 0.9) return Math.max(8192, Math.round(baseContext * 0.75));
+    return baseContext;
+}
+
+function buildTradeoffSummary(model = {}, context = {}, performance = {}, fit = {}) {
+    const qualitySizeB = estimateQualityClassSizeB(model);
+    const activeSizeB = estimateActiveModelSizeB(model);
+    const parts = [];
+
+    if (Number.isFinite(activeSizeB) && activeSizeB > 0) {
+        parts.push(`MoE-style quality above its active ${activeSizeB}B path`);
+    } else if (qualitySizeB >= 28) {
+        parts.push('stronger quality tier');
+    } else if (qualitySizeB >= 12) {
+        parts.push('balanced quality tier');
+    } else {
+        parts.push('faster but lighter model class');
+    }
+
+    if (performance.tokensPerSecond >= 50) {
+        parts.push('fast decode');
+    } else if (performance.tokensPerSecond >= 20) {
+        parts.push('midrange decode');
+    } else {
+        parts.push('slower decode');
+    }
+
+    if (fit.fitMode === 'gpu-resident') {
+        parts.push('good headroom for context');
+    } else if (fit.fitMode === 'hybrid-offload') {
+        parts.push('needs host RAM offload and shorter context');
+    } else if (fit.fitMode === 'experimental-offload') {
+        parts.push('experimental fit; benchmark first');
+    } else if (fit.fitMode === 'poor-fit') {
+        parts.push('unlikely to be pleasant on this box');
+    }
+
+    if (context.engine === 'vllm' && String(model.format || '').toLowerCase().includes('gguf')) {
+        parts.push('format mismatch for vLLM');
+    }
+
+    return parts.join('; ');
+}
+
+function classifyRunLabel(model = {}, context = {}, fit = {}, performance = {}) {
+    const mismatchReason = getFormatMismatchReason(model, context);
+    if (mismatchReason) {
+        return {
+            label: 'format mismatch',
+            reason: mismatchReason
+        };
+    }
+
+    if (fit.fitMode === 'poor-fit' || fit.fitMode === 'experimental-offload') {
+        return {
+            label: 'experimental',
+            reason: 'This candidate is outside the comfortable fit range for the current hardware and should be benchmarked before relying on it.'
+        };
+    }
+
+    if (fit.fitMode === 'hybrid-offload' || fit.fitLabel === 'tight') {
+        return {
+            label: 'likely',
+            reason: 'This candidate should run, but it likely needs either reduced context or host-memory offload to feel stable.'
+        };
+    }
+
+    if (fit.fitMode === 'gpu-resident' && performance.tokensPerSecond >= 6) {
+        return {
+            label: 'confirmed',
+            reason: 'This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.'
+        };
+    }
+
+    return {
+        label: 'likely',
+        reason: 'This candidate looks viable, but it is not as clean a baseline as the confirmed options.'
+    };
 }
 
 function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
     const budgetGB = Math.max(0, getBudgetGB(context));
     const workingSetGB = estimateWorkingSetGB(model);
-    const modelSizeB = estimateModelSizeB(model);
+    const modelSizeB = estimateQualityClassSizeB(model);
     const useCaseAffinity = getUseCaseAffinity(model, context.useCase);
     const sourcePreference = getSourcePreference(model);
+    const popularityPreference = getPopularityPreference(model);
+    const formatPreference = getEngineFormatPreference(model, context);
     const sizeScore = Math.min(modelSizeB, 72) / 2;
-    const pressureRatio = budgetGB > 0 ? workingSetGB / budgetGB : 99;
-
-    let fitScore = 12;
-    let fitLabel = 'comfortable';
-
-    if (pressureRatio > 0.95) {
-        fitScore = -40;
-        fitLabel = 'clear loser on fit';
-    } else if (pressureRatio > 0.85) {
-        fitScore = -12;
-        fitLabel = 'tight';
-    } else if (pressureRatio > 0.72) {
-        fitScore = -4;
-        fitLabel = 'workable with little headroom';
-    }
-
-    const score = Number((sizeScore + useCaseAffinity + sourcePreference + fitScore + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
+    const fit = classifyFit(model, context);
+    const score = Number((sizeScore + useCaseAffinity + sourcePreference + popularityPreference + formatPreference + fit.fitScore + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
 
     return {
         ...model,
         estimatedSizeB: modelSizeB,
+        estimatedDenseSizeB: estimateModelSizeB(model),
+        estimatedActiveSizeB: estimateActiveModelSizeB(model),
         estimatedWorkingSetGB: workingSetGB,
         score,
-        pressureRatio,
-        fitLabel
+        pressureRatio: fit.pressureRatio,
+        fitLabel: fit.fitLabel,
+        fitMode: fit.fitMode,
+        budgetGB
     };
 }
 
-function rankModelCandidates(policy = {}, context = {}, primary = {}) {
+function rankModelCandidates(policy = {}, context = {}, primary = {}, discoveredCandidates = []) {
     const candidates = dedupeModels([
         primary,
         ...getGuideModelCandidates(policy, context),
-        ...getMatchingAlternativeCandidates(policy, context)
+        ...getMatchingAlternativeCandidates(policy, context),
+        ...discoveredCandidates
     ]);
 
     return candidates
@@ -452,6 +792,31 @@ function buildModelReason(selectedModel = {}, primaryModel = {}, selectionContex
     return `This alternative outranked the conservative default for ${selectionContext.useCase || 'the current'} work once shortlist scoring was applied.`;
 }
 
+function buildRecommendationContext(hardware = {}, options = {}) {
+    const policy = loadGuidePolicy();
+    const signals = getSignals(hardware, options);
+    const useCase = normalizeUseCase(options.useCase || options.category || 'general');
+
+    const baseContext = { ...signals, useCase };
+    const engine = chooseEngine(policy, baseContext);
+    const harness = chooseHarness(policy, baseContext);
+    const selectionContext = {
+        ...baseContext,
+        engine: engine.key,
+        harness: harness.name
+    };
+
+    return {
+        policy,
+        signals,
+        useCase,
+        baseContext,
+        engine,
+        harness,
+        selectionContext
+    };
+}
+
 function chooseEngine(policy = {}, context = {}) {
     const rule = chooseRule(policy.rules?.engine || [], context);
     if (!rule) {
@@ -486,7 +851,7 @@ function chooseHarness(policy = {}, context = {}) {
     };
 }
 
-function chooseModel(policy = {}, context = {}) {
+function chooseModel(policy = {}, context = {}, discoveredCandidates = []) {
     const rule = chooseRule(policy.rules?.model || [], context);
     if (!rule) {
         throw new Error(`No model rule matched from ${GUIDE_SOURCE}`);
@@ -497,7 +862,7 @@ function chooseModel(policy = {}, context = {}) {
         throw new Error(`Invalid model rule in ${GUIDE_SOURCE}`);
     }
 
-    const rankedCandidates = rankModelCandidates(policy, context, primaryModel);
+    const rankedCandidates = rankModelCandidates(policy, context, primaryModel, discoveredCandidates);
     if (rankedCandidates.length === 0) {
         throw new Error(`Could not rank model candidates from ${GUIDE_SOURCE}`);
     }
@@ -510,26 +875,38 @@ function chooseModel(policy = {}, context = {}) {
 }
 
 function getGuideStackRecommendation(hardware = {}, options = {}) {
-    const policy = loadGuidePolicy();
-    const signals = getSignals(hardware, options);
-    const useCase = normalizeUseCase(options.useCase || options.category || 'general');
-
-    const baseContext = { ...signals, useCase };
-    const engine = chooseEngine(policy, baseContext);
-    const harness = chooseHarness(policy, baseContext);
-    const selectionContext = {
-        ...baseContext,
-        engine: engine.key,
-        harness: harness.name
-    };
-    const modelChoice = chooseModel(policy, selectionContext);
+    const {
+        policy,
+        signals,
+        useCase,
+        engine,
+        harness,
+        selectionContext
+    } = buildRecommendationContext(hardware, options);
+    const discoveredCandidates = Array.isArray(options.discoveredModels)
+        ? options.discoveredModels.map((item) => buildModelCandidate(item.input || item, item.metadata || {}))
+        : [];
+    const modelChoice = chooseModel(policy, selectionContext, discoveredCandidates);
     const model = modelChoice.selected;
     const contextWindow = estimateContextWindow(policy, selectionContext);
     const performance = estimatePerformance(hardware, model, contextWindow);
     const links = buildLinks(policy, engine, harness, model);
-    const alternatives = modelChoice.rankedCandidates
-        .filter((item) => item.name !== model.name)
-        .slice(0, 4);
+    const rankedCandidates = modelChoice.rankedCandidates.map((candidate) => {
+        const candidateContextWindow = estimateCandidateContextWindow(policy, selectionContext, candidate);
+        const candidatePerformance = estimatePerformance(hardware, candidate, candidateContextWindow);
+        const candidateFit = classifyFit(candidate, selectionContext);
+        const runLabel = classifyRunLabel(candidate, selectionContext, candidateFit, candidatePerformance);
+        return {
+            ...candidate,
+            contextWindow: candidateContextWindow,
+            performance: candidatePerformance,
+            tradeoff: buildTradeoffSummary(candidate, selectionContext, candidatePerformance, candidateFit),
+            runLabel: runLabel.label,
+            runLabelReason: runLabel.reason
+        };
+    });
+    const topChoices = rankedCandidates.slice(0, Math.max(1, Number(options.topN) || 5));
+    const alternatives = topChoices.filter((item) => item.name !== model.name).slice(0, 4);
     const notes = buildNotes(policy, selectionContext);
     const frontierComparison = buildFrontierComparison(model, selectionContext);
 
@@ -546,7 +923,8 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         harness,
         model,
         primaryModel: modelChoice.primary,
-        candidates: modelChoice.rankedCandidates,
+        candidates: rankedCandidates,
+        topChoices,
         alternatives,
         performance,
         links,
@@ -573,8 +951,66 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
     };
 }
 
+function rankExplicitModelCandidates(hardware = {}, modelInputs = [], options = {}) {
+    const {
+        policy,
+        signals,
+        useCase,
+        engine,
+        harness,
+        selectionContext
+    } = buildRecommendationContext(hardware, options);
+
+    const candidates = dedupeModels(modelInputs.map((item) => buildModelCandidate(item.input || item, item.metadata || {})));
+    const rankedCandidates = candidates
+        .map((model) => scoreModelCandidate(model, selectionContext, ''))
+        .sort((left, right) => right.score - left.score)
+        .map((candidate) => {
+            const candidateContextWindow = estimateCandidateContextWindow(policy, selectionContext, candidate);
+            const candidatePerformance = estimatePerformance(hardware, candidate, candidateContextWindow);
+            const candidateFit = classifyFit(candidate, selectionContext);
+            const runLabel = classifyRunLabel(candidate, selectionContext, candidateFit, candidatePerformance);
+            return {
+                ...candidate,
+                contextWindow: candidateContextWindow,
+                performance: candidatePerformance,
+                tradeoff: buildTradeoffSummary(candidate, selectionContext, candidatePerformance, candidateFit),
+                runLabel: runLabel.label,
+                runLabelReason: runLabel.reason
+            };
+        });
+
+    const selected = rankedCandidates[0] || null;
+    const contextWindow = estimateContextWindow(policy, selectionContext);
+
+    return {
+        guideVersion: policy.version || 'unknown',
+        guideSource: GUIDE_SOURCE,
+        useCase,
+        engine,
+        harness,
+        contextWindow,
+        rankedCandidates,
+        selected,
+        hardwareProfile: {
+            cpu: signals.cpuBrand || 'Unknown CPU',
+            gpu: signals.gpuModel || 'No discrete GPU',
+            ramGB: signals.totalRam,
+            vramGB: signals.vram,
+            effectiveMemoryGB: signals.effectiveMemory,
+            backend: signals.backend || 'cpu'
+        }
+    };
+}
+
 module.exports = {
     GUIDE_SOURCE,
     GUIDE_VERSION: loadGuidePolicy().version || 'unknown',
-    getGuideStackRecommendation
+    buildRecommendationContext,
+    getGuideStackRecommendation,
+    buildModelCandidate,
+    estimateModelSizeB,
+    estimateActiveModelSizeB,
+    estimateWorkingSetGB,
+    rankExplicitModelCandidates
 };
