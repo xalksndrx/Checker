@@ -436,6 +436,7 @@ class UnifiedDetector {
                 const name = String(gpu?.name || gpu?.model || '').replace(/\s+/g, ' ').trim();
                 if (!name) return null;
                 if (this.isRemoteDisplayModel(name)) return null;
+                if (this.isPlaceholderGpuModel(name)) return null;
 
                 let type = gpu?.type;
                 if (type !== 'integrated' && type !== 'dedicated') {
@@ -463,6 +464,19 @@ class UnifiedDetector {
             lower.includes('microsoft remote display adapter') ||
             lower.includes('remote display adapter') ||
             lower.includes('basic render driver')
+        );
+    }
+
+    isPlaceholderGpuModel(model) {
+        const lower = String(model || '').toLowerCase().trim();
+        if (!lower) return true;
+
+        return (
+            /^device\s+[0-9a-f]{4}$/i.test(lower) ||
+            lower.includes('microsoft corporation device') ||
+            lower.includes('hyper-v') ||
+            lower.includes('virtual display') ||
+            lower === 'display controller'
         );
     }
 
@@ -590,6 +604,7 @@ class UnifiedDetector {
                 const name = String(controller?.model || controller?.name || '').replace(/\s+/g, ' ').trim();
                 if (!name || name.toLowerCase() === 'unknown') return null;
                 if (this.isRemoteDisplayModel(name)) return null;
+                if (this.isPlaceholderGpuModel(name)) return null;
 
                 const nameLower = name.toLowerCase();
                 if (nameLower.includes('microsoft basic') || nameLower.includes('standard vga')) return null;
@@ -693,6 +708,8 @@ class UnifiedDetector {
             const bracketName = line.match(/\[(?![0-9a-f]{4}:[0-9a-f]{4}\])([^\]]+)\]\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]/i);
             const name = (bracketName?.[1] || genericName || 'Unknown GPU').replace(/\s+/g, ' ').trim();
             if (!name || name.toLowerCase() === 'unknown gpu') continue;
+            if (this.isPlaceholderGpuModel(name)) continue;
+            if (lineLower.includes('microsoft corporation')) continue;
 
             const isIntegrated = this.isIntegratedGPUModel(name) || isIntel;
             let vram = this.estimateFallbackVRAM(name);

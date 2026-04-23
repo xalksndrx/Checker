@@ -1,134 +1,146 @@
 ## agentic
-Engine: llama.cpp
-Harness: Pi
-Model: Qwen/Qwen3.5-9B-GGUF
-Format: GGUF Q4_K_M
-Estimated throughput: ~12 tok/s
-Estimated first token: ~0.75 s
-Suggested context: ~8192 tokens
-Cloud reference: below GPT-4-class
+Engine: vLLM
+Harness: Droid
+Model: sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4
+Format: NVFP4
+Focus: uncensored / abliterated / heretic variants
+Estimated throughput: ~32 tok/s
+Estimated first token: ~0.84 s
+Suggested context: ~16384 tokens
+Cloud reference: roughly GPT-4-era usefulness on narrower work
 Frontier leader: Claude Opus 4.6 / GPT-5.4
 Links:
-- Engine: https://github.com/ggml-org/llama.cpp
-- Harness: https://huggingface.co/docs/inference-providers/en/integrations/pi
-- Model: https://huggingface.co/Qwen/Qwen3.5-9B-GGUF
+- Engine: https://github.com/vllm-project/vllm
+- Harness: https://docs.factory.ai/cli/byok/overview
+- Model: https://huggingface.co/sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4
 Commands:
 ```bash
-Build or install llama.cpp with server support
-huggingface-cli download "Qwen/Qwen3.5-9B-GGUF"
-llama-server -m "./models/qwen3-5.gguf" --host 0.0.0.0 --port 8000
-# Pi -> http://localhost:8000/v1
+pip install -U "vllm>=0.6.0"
+huggingface-cli download "sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4"
+python -m vllm.entrypoints.openai.api_server --model "sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4" --host 0.0.0.0 --port 8000
+# Droid -> http://localhost:8000/v1
 ```
 Why this pick:
-- CPU, integrated GPU, and mixed portability cases map to the guide's llama.cpp recommendation.
-- 12GB-16GB budgets should stay in the 7B-9B class.
-- CPU-only systems benefit from Pi's minimal context bloat and strong token caching.
-- Scored against the compatible Hugging Face shortlist and still won on fit, use-case, and source preference.
+- A single 24GB-class NVIDIA Linux box should start with direct vLLM for a stable benchmark baseline.
+- This uncensored shortlist pick stayed ahead after scoring fit, recency, and use-case alignment.
+- Droid is the default harness for coding and agentic workflows.
+- Picked from a scored Hugging Face shortlist instead of the conservative default; 0xSero gets a preference bonus unless fit or use-case makes it a clear loser.
 Comparison note:
-- This local pick is well below Claude Opus 4.6 / GPT-5.4 and should not be treated as frontier-cloud-equivalent.
+- This should be thought of as practical local GPT-4-era usefulness on narrower tasks, not as a peer to Claude Opus 4.6 / GPT-5.4.
 - Inference from open-model class, size, and fit heuristics rather than direct benchmark equivalence.
 Top choices:
-- 1. Qwen/Qwen3.5-9B-GGUF (GGUF Q4_K_M, confirmed, score 39, fit comfortable, ~12 tok/s, context ~8192)
-- 2. Qwen/Qwen3.5-4B-GGUF (GGUF Q4_K_M, confirmed, score 35, fit comfortable, ~23 tok/s, context ~8192)
-- 3. Qwen/Qwen3.5-14B-Instruct-GGUF (GGUF Q5_K_M, likely, score 16, fit hybrid offload, ~8 tok/s, context ~8192)
-- 4. Qwen/Qwen3-14B-AWQ (AWQ 4-bit, format mismatch, score 11, fit balanced, ~8 tok/s, context ~8192)
+- 1. sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4 (NVFP4, confirmed, score 54.5, fit comfortable, ~32 tok/s, context ~16384)
+- 2. ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ (AWQ 4-bit, confirmed, score 53.3, fit balanced, ~28 tok/s, context ~16384)
+- 3. sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4 (NVFP4, confirmed, score 51.9, fit comfortable, ~46 tok/s, context ~16384)
+- 4. AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4 (NVFP4, confirmed, score 51.1, fit comfortable, ~46 tok/s, context ~16384)
+- 5. huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2 (native weights, confirmed, score 49.2, fit comfortable, ~51 tok/s, context ~16384)
 Tradeoffs:
-- Qwen/Qwen3.5-9B-GGUF: faster but lighter model class; slower decode; good headroom for context
-- Qwen/Qwen3.5-4B-GGUF: faster but lighter model class; midrange decode; good headroom for context
-- Qwen/Qwen3.5-14B-Instruct-GGUF: balanced quality tier; slower decode; needs host RAM offload and shorter context
-- Qwen/Qwen3-14B-AWQ: balanced quality tier; slower decode; good headroom for context
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: balanced quality tier; midrange decode; good headroom for context; uncensored variant
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: stronger quality tier; midrange decode; good headroom for context; uncensored variant
+- sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4: MoE-style quality above its active 4B path; midrange decode; good headroom for context; uncensored variant
+- AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4: MoE-style quality above its active 4B path; midrange decode; good headroom for context; uncensored variant
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: balanced quality tier; fast decode; good headroom for context; uncensored variant
 Run labels:
-- Qwen/Qwen3.5-9B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3.5-4B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3.5-14B-Instruct-GGUF: likely - This candidate should run, but it likely needs either reduced context or host-memory offload to feel stable.
-- Qwen/Qwen3-14B-AWQ: format mismatch - This build is not a GGUF-first llama.cpp target.
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
 
 ## coding
-Engine: llama.cpp
-Harness: Pi
-Model: Qwen/Qwen3.5-9B-GGUF
-Format: GGUF Q4_K_M
-Estimated throughput: ~12 tok/s
-Estimated first token: ~0.75 s
-Suggested context: ~8192 tokens
+Engine: vLLM
+Harness: Droid
+Model: ansulev/OmniCoder-9B-heretic-ara-uncensored
+Format: native weights
+Focus: uncensored / abliterated / heretic variants
+Estimated throughput: ~70 tok/s
+Estimated first token: ~0.15 s
+Suggested context: ~16384 tokens
 Cloud reference: below GPT-4-class
 Frontier leader: Claude Opus 4.6 / GPT-5.4
 Links:
-- Engine: https://github.com/ggml-org/llama.cpp
-- Harness: https://huggingface.co/docs/inference-providers/en/integrations/pi
-- Model: https://huggingface.co/Qwen/Qwen3.5-9B-GGUF
+- Engine: https://github.com/vllm-project/vllm
+- Harness: https://docs.factory.ai/cli/byok/overview
+- Model: https://huggingface.co/ansulev/OmniCoder-9B-heretic-ara-uncensored
 Commands:
 ```bash
-Build or install llama.cpp with server support
-huggingface-cli download "Qwen/Qwen3.5-9B-GGUF"
-llama-server -m "./models/qwen3-5-coder.gguf" --host 0.0.0.0 --port 8000
-# Pi -> http://localhost:8000/v1
+pip install -U "vllm>=0.6.0"
+huggingface-cli download "ansulev/OmniCoder-9B-heretic-ara-uncensored"
+python -m vllm.entrypoints.openai.api_server --model "ansulev/OmniCoder-9B-heretic-ara-uncensored" --host 0.0.0.0 --port 8000
+# Droid -> http://localhost:8000/v1
 ```
 Why this pick:
-- CPU, integrated GPU, and mixed portability cases map to the guide's llama.cpp recommendation.
-- 12GB-16GB budgets should stay in the 7B-9B class.
-- CPU-only systems benefit from Pi's minimal context bloat and strong token caching.
-- Scored against the compatible Hugging Face shortlist and still won on fit, use-case, and source preference.
+- A single 24GB-class NVIDIA Linux box should start with direct vLLM for a stable benchmark baseline.
+- This uncensored shortlist pick stayed ahead after scoring fit, recency, and use-case alignment.
+- Droid is the default harness for coding and agentic workflows.
+- Picked from a scored Hugging Face shortlist instead of the conservative default; 0xSero gets a preference bonus unless fit or use-case makes it a clear loser.
 Comparison note:
 - This local pick is well below Claude Opus 4.6 / GPT-5.4 and should not be treated as frontier-cloud-equivalent.
 - Inference from open-model class, size, and fit heuristics rather than direct benchmark equivalence.
 Top choices:
-- 1. Qwen/Qwen3.5-9B-GGUF (GGUF Q4_K_M, confirmed, score 43, fit comfortable, ~12 tok/s, context ~8192)
-- 2. Qwen/Qwen3.5-4B-GGUF (GGUF Q4_K_M, confirmed, score 39, fit comfortable, ~23 tok/s, context ~8192)
-- 3. Qwen/Qwen3-Coder-14B-GGUF (GGUF Q5_K_M, likely, score 20, fit hybrid offload, ~8 tok/s, context ~8192)
-- 4. Qwen/Qwen2.5-Coder-14B-Instruct-AWQ (AWQ 4-bit, format mismatch, score 15, fit balanced, ~8 tok/s, context ~8192)
+- 1. ansulev/OmniCoder-9B-heretic-ara-uncensored (native weights, confirmed, score 49, fit comfortable, ~70 tok/s, context ~16384)
+- 2. Siavashst77/qwen3-coder-merge (native weights, confirmed, score 49, fit comfortable, ~70 tok/s, context ~16384)
+- 3. ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ (AWQ 4-bit, confirmed, score 48.3, fit balanced, ~28 tok/s, context ~16384)
+- 4. sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4 (NVFP4, confirmed, score 46.5, fit comfortable, ~32 tok/s, context ~16384)
+- 5. huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2 (native weights, confirmed, score 44.2, fit comfortable, ~51 tok/s, context ~16384)
 Tradeoffs:
-- Qwen/Qwen3.5-9B-GGUF: faster but lighter model class; slower decode; good headroom for context
-- Qwen/Qwen3.5-4B-GGUF: faster but lighter model class; midrange decode; good headroom for context
-- Qwen/Qwen3-Coder-14B-GGUF: balanced quality tier; slower decode; needs host RAM offload and shorter context
-- Qwen/Qwen2.5-Coder-14B-Instruct-AWQ: balanced quality tier; slower decode; good headroom for context
+- ansulev/OmniCoder-9B-heretic-ara-uncensored: faster but lighter model class; fast decode; good headroom for context; uncensored variant
+- Siavashst77/qwen3-coder-merge: faster but lighter model class; fast decode; good headroom for context; uncensored variant
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: stronger quality tier; midrange decode; good headroom for context; uncensored variant
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: balanced quality tier; midrange decode; good headroom for context; uncensored variant
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: balanced quality tier; fast decode; good headroom for context; uncensored variant
 Run labels:
-- Qwen/Qwen3.5-9B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3.5-4B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3-Coder-14B-GGUF: likely - This candidate should run, but it likely needs either reduced context or host-memory offload to feel stable.
-- Qwen/Qwen2.5-Coder-14B-Instruct-AWQ: format mismatch - This build is not a GGUF-first llama.cpp target.
+- ansulev/OmniCoder-9B-heretic-ara-uncensored: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- Siavashst77/qwen3-coder-merge: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
 
 ## general
-Engine: llama.cpp
-Harness: Pi
-Model: Qwen/Qwen3.5-9B-GGUF
-Format: GGUF Q4_K_M
-Estimated throughput: ~12 tok/s
-Estimated first token: ~0.75 s
-Suggested context: ~8192 tokens
-Cloud reference: below GPT-4-class
+Engine: vLLM
+Harness: Droid
+Model: sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4
+Format: NVFP4
+Focus: uncensored / abliterated / heretic variants
+Estimated throughput: ~32 tok/s
+Estimated first token: ~0.84 s
+Suggested context: ~16384 tokens
+Cloud reference: roughly GPT-4-era usefulness on narrower work
 Frontier leader: GPT-5.4 / Claude Opus 4.6
 Links:
-- Engine: https://github.com/ggml-org/llama.cpp
-- Harness: https://huggingface.co/docs/inference-providers/en/integrations/pi
-- Model: https://huggingface.co/Qwen/Qwen3.5-9B-GGUF
+- Engine: https://github.com/vllm-project/vllm
+- Harness: https://docs.factory.ai/cli/byok/overview
+- Model: https://huggingface.co/sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4
 Commands:
 ```bash
-Build or install llama.cpp with server support
-huggingface-cli download "Qwen/Qwen3.5-9B-GGUF"
-llama-server -m "./models/qwen3-5.gguf" --host 0.0.0.0 --port 8000
-# Pi -> http://localhost:8000/v1
+pip install -U "vllm>=0.6.0"
+huggingface-cli download "sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4"
+python -m vllm.entrypoints.openai.api_server --model "sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4" --host 0.0.0.0 --port 8000
+# Droid -> http://localhost:8000/v1
 ```
 Why this pick:
-- CPU, integrated GPU, and mixed portability cases map to the guide's llama.cpp recommendation.
-- 12GB-16GB budgets should stay in the 7B-9B class.
-- CPU-only systems benefit from Pi's minimal context bloat and strong token caching.
-- Scored against the compatible Hugging Face shortlist and still won on fit, use-case, and source preference.
+- A single 24GB-class NVIDIA Linux box should start with direct vLLM for a stable benchmark baseline.
+- This uncensored shortlist pick stayed ahead after scoring fit, recency, and use-case alignment.
+- Droid is the default harness unless the user needs a lighter path.
+- Picked from a scored Hugging Face shortlist instead of the conservative default; 0xSero gets a preference bonus unless fit or use-case makes it a clear loser.
 Comparison note:
-- This local pick is well below GPT-5.4 / Claude Opus 4.6 and should not be treated as frontier-cloud-equivalent.
+- This should be thought of as practical local GPT-4-era usefulness on narrower tasks, not as a peer to GPT-5.4 / Claude Opus 4.6.
 - Inference from open-model class, size, and fit heuristics rather than direct benchmark equivalence.
 Top choices:
-- 1. Qwen/Qwen3.5-9B-GGUF (GGUF Q4_K_M, confirmed, score 39, fit comfortable, ~12 tok/s, context ~8192)
-- 2. Qwen/Qwen3.5-4B-GGUF (GGUF Q4_K_M, confirmed, score 35, fit comfortable, ~23 tok/s, context ~8192)
-- 3. Qwen/Qwen3.5-14B-Instruct-GGUF (GGUF Q5_K_M, likely, score 16, fit hybrid offload, ~8 tok/s, context ~8192)
-- 4. Qwen/Qwen3-14B-AWQ (AWQ 4-bit, format mismatch, score 11, fit balanced, ~8 tok/s, context ~8192)
+- 1. sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4 (NVFP4, confirmed, score 54.5, fit comfortable, ~32 tok/s, context ~16384)
+- 2. ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ (AWQ 4-bit, confirmed, score 53.3, fit balanced, ~28 tok/s, context ~16384)
+- 3. sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4 (NVFP4, confirmed, score 51.9, fit comfortable, ~46 tok/s, context ~16384)
+- 4. AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4 (NVFP4, confirmed, score 51.1, fit comfortable, ~46 tok/s, context ~16384)
+- 5. huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2 (native weights, confirmed, score 49.2, fit comfortable, ~51 tok/s, context ~16384)
 Tradeoffs:
-- Qwen/Qwen3.5-9B-GGUF: faster but lighter model class; slower decode; good headroom for context
-- Qwen/Qwen3.5-4B-GGUF: faster but lighter model class; midrange decode; good headroom for context
-- Qwen/Qwen3.5-14B-Instruct-GGUF: balanced quality tier; slower decode; needs host RAM offload and shorter context
-- Qwen/Qwen3-14B-AWQ: balanced quality tier; slower decode; good headroom for context
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: balanced quality tier; midrange decode; good headroom for context; uncensored variant
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: stronger quality tier; midrange decode; good headroom for context; uncensored variant
+- sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4: MoE-style quality above its active 4B path; midrange decode; good headroom for context; uncensored variant
+- AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4: MoE-style quality above its active 4B path; midrange decode; good headroom for context; uncensored variant
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: balanced quality tier; fast decode; good headroom for context; uncensored variant
 Run labels:
-- Qwen/Qwen3.5-9B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3.5-4B-GGUF: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
-- Qwen/Qwen3.5-14B-Instruct-GGUF: likely - This candidate should run, but it likely needs either reduced context or host-memory offload to feel stable.
-- Qwen/Qwen3-14B-AWQ: format mismatch - This build is not a GGUF-first llama.cpp target.
+- sakamakismile/Huihui-Qwen3.6-27B-abliterated-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- ibrahimkettaneh/Qwen2.5-32B-Instruct-abliterated-pass2-AWQ: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- sakamakismile/Huihui-gemma-4-26B-A4B-it-abliterated-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- AEON-7/Gemma-4-26B-A4B-it-Uncensored-NVFP4: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.
+- huihui-ai/Qwen2.5-14B-Instruct-abliterated-v2: confirmed - This candidate fits the selected runtime cleanly and should be a safe default for this hardware class.

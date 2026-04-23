@@ -27,6 +27,8 @@ That single run prints:
 
 It also overwrites [`install.md`](./install.md) with an agent-ready install plan.
 
+If you want the checker to focus specifically on uncensored variants, add `--uncensored`. That mode narrows discovery and ranking toward repos tagged or named with signals such as `uncensored`, `abliterated`, `heretic`, or `refusal-removal`.
+
 ## Root Files
 
 The user-facing files in the repo root are:
@@ -80,6 +82,21 @@ Limit the recommendation list:
 node bin/checker.js --top 5
 ```
 
+Focus on uncensored / abliterated / heretic variants:
+
+```bash
+node bin/checker.js --uncensored
+node bin/checker.js --use-case general --uncensored --top 10
+```
+
+Compare explicit uncensored candidates on your current machine:
+
+```bash
+node bin/checker.js --uncensored --use-case general \
+  --model HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced \
+  --model Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16
+```
+
 That comparison mode:
 
 - fetches Hugging Face repo metadata when possible
@@ -104,6 +121,31 @@ It:
 7. writes [`install.md`](./install.md)
 
 The recommendations are guide-driven and hardware-aware. They are not limited to 0xSero models. 0xSero Hugging Face releases still get a preference boost when they fit the hardware well, but they no longer crowd out stronger options from the wider Hugging Face pool.
+
+With `--uncensored`, the checker changes both discovery and ranking:
+
+- discovery adds uncensored-focused Hugging Face searches
+- matching repos must look like runnable model repos, not adapters or checkpoints
+- ranking prefers uncensored / abliterated / heretic / refusal-removal variants instead of penalizing them
+- the mode still checks fit, format compatibility, and context headroom against your hardware
+
+Current CLI options:
+
+```text
+--simulate <profile>   Simulate a saved hardware profile
+--gpu <model>          Simulate a custom GPU
+--ram <gb>             Simulate RAM in GB
+--cpu <model>          Simulate a custom CPU
+--vram <gb>            Override GPU VRAM in GB
+--use-case <name>      Evaluate for general, coding, or agentic
+--top <n>              Show top ranked choices (default: 5, max: 10)
+--model <id-or-url>    Evaluate an explicit model candidate (repeatable)
+--models <list>        Comma-separated explicit model IDs or HF URLs
+--uncensored           Focus discovery and ranking on uncensored / abliterated / heretic variants
+--no-verbose           Disable step-by-step progress
+-h, --help             Show this help
+-V, --version          Show package version
+```
 
 ## Performance Output
 

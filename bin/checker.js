@@ -12,8 +12,31 @@ const {
 
 const INSTALL_MD_PATH = path.join(process.cwd(), 'install.md');
 const DEFAULT_TOP_N = 5;
+const HF_DISCOVERY_LIMIT = 100;
+const HF_DISCOVERY_MAX_CANDIDATES = 350;
+const TRUSTED_MODEL_AUTHORS = new Set([
+    '0xsero',
+    'anthracite-org',
+    'bartowski',
+    'cyankiwi',
+    'deepseek-ai',
+    'google',
+    'ibm-granite',
+    'lmstudio-community',
+    'meta-llama',
+    'microsoft',
+    'mistralai',
+    'mlx-community',
+    'nvidia',
+    'openbmb',
+    'qwen',
+    'quanttrio',
+    'redhatai',
+    'unsloth'
+]);
 const HF_DISCOVERY_FALLBACK = {
     general: [
+        'Qwen/Qwen3.6-27B-FP8',
         '0xSero/Qwen-3.5-28B-A3B-REAP',
         '0xSero/Kimi-K2.5-PRISM-REAP-72',
         'Qwen/Qwen3-14B-AWQ',
@@ -24,6 +47,7 @@ const HF_DISCOVERY_FALLBACK = {
         'Qwen/Qwen3.5-9B-GGUF'
     ],
     agentic: [
+        'Qwen/Qwen3.6-27B-FP8',
         '0xSero/Qwen-3.5-28B-A3B-REAP',
         '0xSero/Kimi-K2.5-PRISM-REAP-72',
         'Qwen/Qwen3-14B-AWQ',
@@ -42,6 +66,26 @@ const HF_DISCOVERY_FALLBACK = {
         'Qwen/Qwen3-Coder-14B-GGUF'
     ]
 };
+const HF_DISCOVERY_FALLBACK_UNCENSORED = {
+    general: [
+        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
+        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
+    ],
+    agentic: [
+        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
+        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
+    ],
+    coding: [
+        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
+        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
+        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
+    ]
+};
 
 function parseArgs(argv = []) {
     const options = {
@@ -54,6 +98,7 @@ function parseArgs(argv = []) {
         useCase: 'general',
         topN: DEFAULT_TOP_N,
         models: [],
+        uncensored: false,
         help: false,
         version: false
     };
@@ -72,6 +117,10 @@ function parseArgs(argv = []) {
         }
         if (arg === '--no-verbose') {
             options.verbose = false;
+            continue;
+        }
+        if (arg === '--uncensored') {
+            options.uncensored = true;
             continue;
         }
         if (arg === '--simulate' && next) {
@@ -137,6 +186,7 @@ Options:
   --top <n>              Show top ranked choices (default: 5, max: 10)
   --model <id-or-url>    Evaluate an explicit model candidate (repeatable)
   --models <list>        Comma-separated explicit model IDs or HF URLs
+  --uncensored           Focus discovery and ranking on uncensored / abliterated / heretic variants
   --no-verbose           Disable step-by-step progress
   -h, --help             Show this help
   -V, --version          Show package version
@@ -210,6 +260,9 @@ function displayRecommendation(recommendation) {
     console.log('\n' + chalk.bgGreen.black.bold(' MODEL RECOMMENDATION '));
     console.log(chalk.green('╭' + '─'.repeat(78)));
     console.log(chalk.green('│') + ` Use case: ${chalk.cyan.bold(recommendation.useCase)}`);
+    if (recommendation.focusUncensored) {
+        console.log(chalk.green('│') + ` Focus: ${chalk.yellow('uncensored / abliterated / heretic variants')}`);
+    }
     console.log(chalk.green('│') + ` Engine: ${chalk.white.bold(recommendation.engine.label)} ${chalk.gray(`via ${recommendation.engine.controlPlane}`)}`);
     console.log(chalk.green('│') + ` Harness: ${chalk.white.bold(recommendation.harness.name)}`);
     console.log(chalk.green('│') + ` Model: ${chalk.white.bold(recommendation.model.name)}`);
@@ -247,6 +300,9 @@ function displayModelComparison(result) {
     console.log('\n' + chalk.bgMagenta.white.bold(' MODEL COMPARISON '));
     console.log(chalk.magenta('╭' + '─'.repeat(78)));
     console.log(chalk.magenta('│') + ` Use case: ${chalk.cyan.bold(result.useCase)}`);
+    if (result.focusUncensored) {
+        console.log(chalk.magenta('│') + ` Focus: ${chalk.yellow('uncensored / abliterated / heretic variants')}`);
+    }
     console.log(chalk.magenta('│') + ` Engine lane: ${chalk.white.bold(result.engine.label)} ${chalk.gray(`via ${result.engine.controlPlane}`)}`);
     console.log(chalk.magenta('│') + ` Harness lane: ${chalk.white.bold(result.harness.name)}`);
     console.log(chalk.magenta('│') + ` Suggested context: ${chalk.white(`~${result.contextWindow} tokens`)}`);
@@ -278,6 +334,7 @@ function writeInstallMarkdown(recommendations = []) {
             `Harness: ${recommendation.harness.name}`,
             `Model: ${recommendation.model.name}`,
             `Format: ${recommendation.model.format}`,
+            recommendation.focusUncensored ? 'Focus: uncensored / abliterated / heretic variants' : '',
             `Estimated throughput: ~${recommendation.performance.tokensPerSecond} tok/s`,
             `Estimated first token: ~${recommendation.performance.firstTokenSeconds} s`,
             `Suggested context: ~${recommendation.performance.contextWindow} tokens`,
@@ -449,20 +506,9 @@ function dedupeFetchedModels(models = []) {
     return deduped;
 }
 
-function buildDiscoverySearchTerms(useCase = 'general') {
-    if (useCase === 'coding') {
-        return ['qwen coder', 'deepseek coder', 'codestral', 'starcoder', 'coder'];
-    }
-
-    if (useCase === 'agentic') {
-        return ['qwen instruct', 'gemma instruct', 'kimi', 'llama instruct', 'moe'];
-    }
-
-    return ['qwen instruct', 'gemma instruct', 'kimi', 'llama instruct', 'mistral instruct'];
-}
-
-function buildFallbackCandidatePool(useCase = 'general') {
-    const models = HF_DISCOVERY_FALLBACK[useCase] || HF_DISCOVERY_FALLBACK.general;
+function buildFallbackCandidatePool(useCase = 'general', options = {}) {
+    const fallbackSet = options.uncensored ? HF_DISCOVERY_FALLBACK_UNCENSORED : HF_DISCOVERY_FALLBACK;
+    const models = fallbackSet[useCase] || fallbackSet.general;
     return models.map((modelId) => ({ input: modelId, metadata: { id: modelId, source: 'fallback-seed' } }));
 }
 
@@ -470,9 +516,10 @@ async function searchHuggingFaceModels(params = {}) {
     const query = new URLSearchParams();
     if (params.author) query.set('author', params.author);
     if (params.search) query.set('search', params.search);
+    if (params.filter) query.set('filter', params.filter);
     query.set('limit', String(params.limit || 20));
-    query.set('sort', 'downloads');
-    query.set('direction', '-1');
+    query.set('sort', params.sort || 'downloads');
+    query.set('direction', params.direction || '-1');
 
     const url = `https://huggingface.co/api/models?${query.toString()}`;
     const response = await fetchJson(url);
@@ -483,26 +530,197 @@ async function searchHuggingFaceModels(params = {}) {
     }));
 }
 
-async function discoverCandidateModels(hardware = {}, useCase = 'general') {
-    const context = buildRecommendationContext(hardware, { useCase });
-    const searches = [
-        { author: '0xSero', limit: 24 },
-        ...buildDiscoverySearchTerms(context.useCase).map((search) => ({ search, limit: 18 }))
+function getDiscoveryTerms(useCase = 'general', options = {}) {
+    const terms = [];
+
+    if (options.uncensored) {
+        terms.push('uncensored', 'abliterated', 'heretic', 'refusal-removal', 'qwen3.6 uncensored');
+    }
+
+    if (useCase === 'coding') {
+        terms.push('qwen3.6', 'qwen coder', 'coder', 'codestral', 'deepseek coder', 'devstral');
+        return Array.from(new Set(terms));
+    }
+
+    if (useCase === 'agentic') {
+        terms.push('qwen3.6', 'qwen instruct', 'kimi', 'glm', 'llama instruct', 'gemma instruct');
+        return Array.from(new Set(terms));
+    }
+
+    terms.push('qwen3.6', 'qwen instruct', 'llama instruct', 'mistral instruct', 'gemma instruct', 'deepseek');
+    return Array.from(new Set(terms));
+}
+
+function buildDiscoveryQueries(useCase = 'general', options = {}) {
+    const terms = getDiscoveryTerms(useCase, options);
+    const queries = [
+        { filter: 'text-generation', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
+        { filter: 'text-generation', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
+        { filter: 'image-text-to-text', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
+        { filter: 'image-text-to-text', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
+        { author: 'Qwen', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
+        { author: 'Qwen', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
+        { author: '0xSero', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
+        { author: '0xSero', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT }
     ];
+
+    terms.forEach((search) => {
+        queries.push({ search, sort: 'downloads', limit: HF_DISCOVERY_LIMIT });
+        queries.push({ search, sort: 'lastModified', limit: HF_DISCOVERY_LIMIT });
+    });
+
+    return queries;
+}
+
+function getModelAuthor(modelId = '', metadata = {}) {
+    const explicitAuthor = String(metadata?.author || '').trim();
+    if (explicitAuthor) return explicitAuthor;
+    return String(modelId || '').split('/')[0] || '';
+}
+
+function normalizeTagList(metadata = {}) {
+    return Array.isArray(metadata?.tags)
+        ? metadata.tags.map((tag) => String(tag).toLowerCase())
+        : [];
+}
+
+function modelTextBlob(item = {}) {
+    const metadata = item?.metadata || {};
+    const modelId = extractModelId(item?.input || metadata?.id || metadata?.modelId || '');
+    const author = getModelAuthor(modelId, metadata);
+    return [
+        modelId,
+        author,
+        metadata?.pipeline_tag || '',
+        ...(Array.isArray(metadata?.tags) ? metadata.tags : [])
+    ].join(' ').toLowerCase();
+}
+
+function matchesUncensoredFocus(item = {}) {
+    const text = modelTextBlob(item);
+    return ['uncensored', 'abliterated', 'obliterated', 'heretic', 'refusal-removal']
+        .some((term) => text.includes(term));
+}
+
+function isTrustedModelAuthor(item = {}) {
+    const metadata = item?.metadata || {};
+    const modelId = extractModelId(item?.input || metadata?.id || metadata?.modelId || '');
+    const author = getModelAuthor(modelId, metadata).toLowerCase();
+    return TRUSTED_MODEL_AUTHORS.has(author);
+}
+
+function hasCommunityTraction(item = {}) {
+    const metadata = item?.metadata || {};
+    const downloads = Math.max(0, Number(metadata?.downloads || 0));
+    const likes = Math.max(0, Number(metadata?.likes || 0));
+
+    if (downloads >= 100 || likes >= 10) return true;
+    if (downloads >= 25 && likes >= 2) return true;
+    return false;
+}
+
+function isRunnableModelRepo(item = {}) {
+    const metadata = item?.metadata || {};
+    const tags = normalizeTagList(metadata);
+    const text = modelTextBlob(item);
+    const pipeline = String(metadata?.pipeline_tag || '').toLowerCase();
+
+    if (pipeline === 'text-generation' || pipeline === 'image-text-to-text') return true;
+
+    return (
+        tags.includes('text-generation') ||
+        tags.includes('image-text-to-text') ||
+        tags.includes('conversational') ||
+        tags.includes('endpoints_compatible') ||
+        tags.includes('gguf') ||
+        tags.includes('awq') ||
+        tags.includes('gptq') ||
+        tags.includes('mlx') ||
+        tags.includes('fp8') ||
+        tags.includes('nvfp4') ||
+        text.includes('gguf') ||
+        text.includes('awq') ||
+        text.includes('gptq') ||
+        text.includes('mlx') ||
+        text.includes('fp8') ||
+        text.includes('nvfp4')
+    );
+}
+
+function isAdapterOrCheckpointRepo(item = {}) {
+    const metadata = item?.metadata || {};
+    const tags = normalizeTagList(metadata);
+    const text = modelTextBlob(item);
+
+    const blockedTokens = [
+        'adapter',
+        'adapters',
+        'lora',
+        'qlora',
+        'peft',
+        'checkpoint',
+        'debug',
+        'generated_from_trainer',
+        'grpo',
+        'dora',
+        'reward-model',
+        'reranker',
+        'embedding',
+        'embeddings'
+    ];
+
+    return blockedTokens.some((token) => tags.includes(token) || text.includes(token));
+}
+
+function matchesDiscoveryUseCase(item = {}, useCase = 'general') {
+    const text = modelTextBlob(item);
+    const tags = normalizeTagList(item?.metadata || {});
+    const isConversational = tags.includes('conversational') || text.includes(' chat') || text.includes('instruct');
+    const isCoding = text.includes('coder') || text.includes('codestral') || text.includes('starcoder') || text.includes('devstral') || text.includes('code');
+
+    if (useCase === 'coding') {
+        return isCoding || isConversational;
+    }
+
+    if (useCase === 'agentic') {
+        return isConversational || isCoding || text.includes('agent');
+    }
+
+    return isConversational || text.includes('assistant');
+}
+
+function shouldKeepDiscoveredModel(item = {}, useCase = 'general', options = {}) {
+    const metadata = item?.metadata || {};
+    const modelId = extractModelId(item?.input || metadata?.id || metadata?.modelId || '');
+    if (!modelId || !modelId.includes('/')) return false;
+    if (metadata?.private) return false;
+    if (!isRunnableModelRepo(item)) return false;
+    if (isAdapterOrCheckpointRepo(item)) return false;
+    if (!matchesDiscoveryUseCase(item, useCase)) return false;
+    if (options.uncensored && !matchesUncensoredFocus(item)) return false;
+    if (options.uncensored) return true;
+
+    return isTrustedModelAuthor(item) || hasCommunityTraction(item);
+}
+
+async function discoverCandidateModels(hardware = {}, options = {}) {
+    const context = buildRecommendationContext(hardware, options);
+    const searches = buildDiscoveryQueries(context.useCase, options);
 
     const results = await Promise.allSettled(searches.map((params) => searchHuggingFaceModels(params)));
     const found = results
         .filter((result) => result.status === 'fulfilled')
-        .flatMap((result) => result.value);
+        .flatMap((result) => result.value)
+        .filter((item) => shouldKeepDiscoveredModel(item, context.useCase, options));
 
     if (found.length === 0) {
-        return buildFallbackCandidatePool(context.useCase);
+        return buildFallbackCandidatePool(context.useCase, options);
     }
 
     return dedupeFetchedModels([
         ...found,
-        ...buildFallbackCandidatePool(context.useCase)
-    ]);
+        ...buildFallbackCandidatePool(context.useCase, options)
+    ]).slice(0, HF_DISCOVERY_MAX_CANDIDATES);
 }
 
 async function main() {
@@ -528,7 +746,7 @@ async function main() {
     const hardware = await checker.getSystemInfo();
     if (options.models.length > 0) {
         const fetchedModels = await Promise.all(options.models.map(fetchModelMetadata));
-        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: options.topN });
+        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: options.topN, uncensored: options.uncensored });
         comparison.rankedCandidates = comparison.rankedCandidates.slice(0, options.topN);
         comparison.selected = comparison.rankedCandidates[0] || comparison.selected;
 
@@ -542,10 +760,11 @@ async function main() {
     }
 
     const recommendations = await Promise.all(['agentic', 'coding', 'general'].map(async (useCase) => {
-        const discoveredModels = await discoverCandidateModels(hardware, useCase);
+        const discoveredModels = await discoverCandidateModels(hardware, { useCase, uncensored: options.uncensored });
         return getGuideStackRecommendation(hardware, {
             useCase,
             topN: options.topN,
+            uncensored: options.uncensored,
             discoveredModels
         });
     }));

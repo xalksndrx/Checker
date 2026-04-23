@@ -238,21 +238,29 @@ function inferModelFormat(modelId = '', metadata = {}) {
     const ggufQuantMatch = lower.match(/\b(i?q\d(?:_[a-z0-9]+)+)\b/i);
     const exl2Match = lower.match(/\b(\d+(?:\.\d+)?)bpw\b/i);
 
+    if (quantMethod === 'nvfp4' || tags.includes('nvfp4')) {
+        return 'NVFP4';
+    }
+    if (quantMethod === 'fp8' || tags.includes('fp8') || safetensorTypes.some((key) => key.startsWith('F8_'))) {
+        return 'FP8';
+    }
     if (quantMethod === 'awq' || tags.includes('awq')) {
         if (Number.isFinite(bits) && bits > 0) return `AWQ ${bits}-bit`;
         return 'AWQ 4-bit';
     }
     if (lower.includes('awq')) return 'AWQ 4-bit';
     if (lower.includes('gptq') || tags.includes('gptq')) return 'GPTQ 4-bit';
+    if (ggufQuantMatch) return `GGUF ${ggufQuantMatch[1].toUpperCase()}`;
+    if (tags.includes('gguf') || lower.includes('gguf')) return 'GGUF';
+    if (tags.includes('mlx') || lower.includes('mlx')) return 'MLX';
+    if (lower.includes('nvfp4')) return 'NVFP4';
+    if (lower.includes('fp8')) return 'FP8';
     if (lower.includes('w4a16') || lower.includes('autoround') || lower.includes('4bit') || lower.includes('4-bit')) {
         return 'W4A16 / 4-bit';
     }
     if (lower.includes('exl2') || tags.includes('exl2')) {
         return exl2Match ? `EXL2 ${exl2Match[1]}bpw` : 'EXL2';
     }
-    if (ggufQuantMatch) return `GGUF ${ggufQuantMatch[1].toUpperCase()}`;
-    if (tags.includes('gguf') || lower.includes('gguf')) return 'GGUF';
-    if (tags.includes('mlx') || lower.includes('mlx')) return 'MLX';
     if (lower.includes('reap') && (lower.includes('w4a16') || tags.includes('4-bit') || tags.includes('awq'))) {
         return 'REAP + low-bit quant';
     }
@@ -280,6 +288,7 @@ function getModelCautionFlags(modelId = '', metadata = {}) {
     const flags = [];
     if (haystack.includes('uncensored')) flags.push('uncensored');
     if (haystack.includes('abliterated') || haystack.includes('obliterated')) flags.push('abliterated');
+    if (haystack.includes('heretic')) flags.push('heretic');
     if (haystack.includes('refusal-removal')) flags.push('refusal-removal');
     return flags;
 }
@@ -452,26 +461,9 @@ function dedupeModels(models = []) {
     return Array.from(byName.values());
 }
 
-function matchesExpectedLoosely(expected, actual) {
-    if (expected === undefined) return true;
-
-    if (Array.isArray(expected)) {
-        return expected.includes(actual);
-    }
-
-    return expected === actual;
-}
-
-function ruleIsCompatible(rule = {}, context = {}) {
-    const when = rule.when || {};
-    const compatibleKeys = ['engine', 'useCase', 'isPhone', 'isApple', 'isLinux', 'isWindows', 'isNvidia', 'isAMD', 'cpuOnly'];
-
-    return compatibleKeys.every((key) => matchesExpectedLoosely(when[key], context[key]));
-}
-
 function getGuideModelCandidates(policy = {}, context = {}) {
     const models = (policy.rules?.model || [])
-        .filter((rule) => ruleIsCompatible(rule, context))
+        .filter((rule) => matchesCriteria(rule.when, context))
         .map((rule) => pickUseCaseValue(rule.value, context.useCase))
         .filter((model) => model?.name);
 
@@ -480,6 +472,8 @@ function getGuideModelCandidates(policy = {}, context = {}) {
 
 function getQuantizationFactor(format = '') {
     const text = String(format || '').toLowerCase();
+    if (text.includes('nvfp4')) return 0.45;
+    if (text.includes('fp8')) return 0.68;
     if (text.includes('w4a16') || text.includes('4-bit') || text.includes('q4') || text.includes('4.0bpw') || text.includes('awq') || text.includes('gptq')) return 0.55;
     if (text.includes('q5')) return 0.67;
     if (text.includes('q6')) return 0.78;
@@ -555,13 +549,53 @@ function getPopularityPreference(model = {}) {
     return Math.min(6, Number((Math.log10(downloads + 10) + Math.log10((likes * 10) + 10) - 2).toFixed(1)));
 }
 
+function matchesUncensoredFocus(model = {}) {
+    const cautionFlags = Array.isArray(model.cautionFlags) ? model.cautionFlags : [];
+    if (cautionFlags.some((flag) => ['uncensored', 'abliterated', 'heretic', 'refusal-removal'].includes(String(flag).toLowerCase()))) {
+        return true;
+    }
+
+    const text = [
+        String(model.name || ''),
+        String(model.source || ''),
+        ...(Array.isArray(model.tags) ? model.tags : [])
+    ].join(' ').toLowerCase();
+
+    return ['uncensored', 'abliterated', 'obliterated', 'heretic', 'refusal-removal']
+        .some((term) => text.includes(term));
+}
+
+function getFreshnessPreference(model = {}) {
+    const lastModified = Date.parse(model.lastModified || '');
+    if (!Number.isFinite(lastModified)) return 0;
+
+    const ageDays = Math.max(0, (Date.now() - lastModified) / (1000 * 60 * 60 * 24));
+    if (ageDays <= 3) return 2.5;
+    if (ageDays <= 14) return 1.8;
+    if (ageDays <= 45) return 1.0;
+    if (ageDays <= 120) return 0.4;
+    return 0;
+}
+
+function getCautionPenalty(model = {}, context = {}) {
+    if (context.focusUncensored) return 0;
+    const flags = Array.isArray(model.cautionFlags) ? model.cautionFlags : [];
+    if (flags.length === 0) return 0;
+    return Math.min(9, flags.length * 3);
+}
+
+function getUncensoredPreference(model = {}, context = {}) {
+    if (!context.focusUncensored) return 0;
+    return matchesUncensoredFocus(model) ? 10 : -12;
+}
+
 function getEngineFormatPreference(model = {}, context = {}) {
     const format = String(model.format || '').toLowerCase();
     const engine = String(context.engine || '').toLowerCase();
 
     if (engine === 'vllm') {
         if (format.includes('gguf') || format.includes('mlx')) return -18;
-        if (format.includes('awq') || format.includes('gptq') || format.includes('w4a16') || format.includes('reap') || format.includes('native') || format.includes('bf16') || format.includes('f16')) return 6;
+        if (format.includes('awq') || format.includes('gptq') || format.includes('w4a16') || format.includes('reap') || format.includes('fp8') || format.includes('nvfp4') || format.includes('native') || format.includes('bf16') || format.includes('f16')) return 6;
         return 0;
     }
 
@@ -673,6 +707,10 @@ function buildTradeoffSummary(model = {}, context = {}, performance = {}, fit = 
         parts.push('format mismatch for vLLM');
     }
 
+    if (matchesUncensoredFocus(model)) {
+        parts.push('uncensored variant');
+    }
+
     return parts.join('; ');
 }
 
@@ -719,10 +757,13 @@ function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
     const useCaseAffinity = getUseCaseAffinity(model, context.useCase);
     const sourcePreference = getSourcePreference(model);
     const popularityPreference = getPopularityPreference(model);
+    const freshnessPreference = getFreshnessPreference(model);
+    const cautionPenalty = getCautionPenalty(model, context);
+    const uncensoredPreference = getUncensoredPreference(model, context);
     const formatPreference = getEngineFormatPreference(model, context);
     const sizeScore = Math.min(modelSizeB, 72) / 2;
     const fit = classifyFit(model, context);
-    const score = Number((sizeScore + useCaseAffinity + sourcePreference + popularityPreference + formatPreference + fit.fitScore + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
+    const score = Number((sizeScore + useCaseAffinity + sourcePreference + popularityPreference + freshnessPreference + uncensoredPreference + formatPreference + fit.fitScore - cautionPenalty + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
 
     return {
         ...model,
@@ -738,13 +779,39 @@ function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
     };
 }
 
+function choosePreferredDefaultCandidate(rankedCandidates = [], context = {}) {
+    if (rankedCandidates.length === 0) return null;
+
+    const gpuResidentCandidates = rankedCandidates.filter((candidate) =>
+        candidate.fitMode === 'gpu-resident' && !getFormatMismatchReason(candidate, context)
+    );
+
+    if (gpuResidentCandidates.length === 0) {
+        return rankedCandidates[0];
+    }
+
+    const topCandidate = rankedCandidates[0];
+    if (topCandidate.fitMode === 'gpu-resident' && !getFormatMismatchReason(topCandidate, context)) {
+        return topCandidate;
+    }
+
+    return gpuResidentCandidates[0];
+}
+
+function filterCandidatesForFocus(candidates = [], context = {}) {
+    if (!context.focusUncensored) return candidates;
+
+    const focusedCandidates = candidates.filter((candidate) => matchesUncensoredFocus(candidate));
+    return focusedCandidates.length > 0 ? focusedCandidates : candidates;
+}
+
 function rankModelCandidates(policy = {}, context = {}, primary = {}, discoveredCandidates = []) {
-    const candidates = dedupeModels([
+    const candidates = filterCandidatesForFocus(dedupeModels([
         primary,
         ...getGuideModelCandidates(policy, context),
         ...getMatchingAlternativeCandidates(policy, context),
         ...discoveredCandidates
-    ]);
+    ]), context);
 
     return candidates
         .map((model) => scoreModelCandidate(model, context, primary.name))
@@ -781,6 +848,10 @@ function buildFrontierComparison(model = {}, context = {}) {
 function buildModelReason(selectedModel = {}, primaryModel = {}, selectionContext = {}) {
     if (selectedModel.reason) return selectedModel.reason;
 
+    if (selectionContext.focusUncensored && matchesUncensoredFocus(selectedModel)) {
+        return 'This uncensored shortlist pick stayed ahead after scoring fit, recency, and use-case alignment.';
+    }
+
     if (selectedModel.name === primaryModel.name) {
         return 'This model stayed ahead after scoring fit, use-case alignment, and source preference across the compatible shortlist.';
     }
@@ -796,8 +867,9 @@ function buildRecommendationContext(hardware = {}, options = {}) {
     const policy = loadGuidePolicy();
     const signals = getSignals(hardware, options);
     const useCase = normalizeUseCase(options.useCase || options.category || 'general');
+    const focusUncensored = Boolean(options.uncensored);
 
-    const baseContext = { ...signals, useCase };
+    const baseContext = { ...signals, useCase, focusUncensored };
     const engine = chooseEngine(policy, baseContext);
     const harness = chooseHarness(policy, baseContext);
     const selectionContext = {
@@ -867,10 +939,16 @@ function chooseModel(policy = {}, context = {}, discoveredCandidates = []) {
         throw new Error(`Could not rank model candidates from ${GUIDE_SOURCE}`);
     }
 
+    const selectedCandidate = choosePreferredDefaultCandidate(rankedCandidates, context) || rankedCandidates[0];
+    const orderedCandidates = [
+        selectedCandidate,
+        ...rankedCandidates.filter((candidate) => candidate.name !== selectedCandidate.name)
+    ];
+
     return {
-        selected: rankedCandidates[0],
+        selected: selectedCandidate,
         primary: primaryModel,
-        rankedCandidates
+        rankedCandidates: orderedCandidates
     };
 }
 
@@ -914,6 +992,7 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         guideVersion: policy.version || 'unknown',
         guideSource: GUIDE_SOURCE,
         useCase,
+        focusUncensored: Boolean(selectionContext.focusUncensored),
         platform: {
             normalized: signals.platform,
             raw: signals.rawPlatform || signals.platform,
@@ -961,7 +1040,10 @@ function rankExplicitModelCandidates(hardware = {}, modelInputs = [], options = 
         selectionContext
     } = buildRecommendationContext(hardware, options);
 
-    const candidates = dedupeModels(modelInputs.map((item) => buildModelCandidate(item.input || item, item.metadata || {})));
+    const candidates = filterCandidatesForFocus(
+        dedupeModels(modelInputs.map((item) => buildModelCandidate(item.input || item, item.metadata || {}))),
+        selectionContext
+    );
     const rankedCandidates = candidates
         .map((model) => scoreModelCandidate(model, selectionContext, ''))
         .sort((left, right) => right.score - left.score)
@@ -987,6 +1069,7 @@ function rankExplicitModelCandidates(hardware = {}, modelInputs = [], options = 
         guideVersion: policy.version || 'unknown',
         guideSource: GUIDE_SOURCE,
         useCase,
+        focusUncensored: Boolean(selectionContext.focusUncensored),
         engine,
         harness,
         contextWindow,
