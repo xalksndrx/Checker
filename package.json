@@ -7,7 +7,8 @@
   },
   "main": "bin/checker.js",
   "scripts": {
-    "test": "node bin/checker.js --simulate phone_mid --no-verbose",
+    "test": "node --check bin/checker.js && node --check src/guide/stack-recommender.js",
+    "test:live": "node bin/checker.js --simulate phone_mid --no-verbose",
     "dev": "node bin/checker.js",
     "start": "node bin/checker.js"
   },

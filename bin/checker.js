@@ -13,79 +13,12 @@ const {
 const INSTALL_MD_PATH = path.join(process.cwd(), 'install.md');
 const DEFAULT_TOP_N = 5;
 const HF_DISCOVERY_LIMIT = 100;
-const HF_DISCOVERY_MAX_CANDIDATES = 350;
-const TRUSTED_MODEL_AUTHORS = new Set([
-    '0xsero',
-    'anthracite-org',
-    'bartowski',
-    'cyankiwi',
-    'deepseek-ai',
-    'google',
-    'ibm-granite',
-    'lmstudio-community',
-    'meta-llama',
-    'microsoft',
-    'mistralai',
-    'mlx-community',
-    'nvidia',
-    'openbmb',
-    'qwen',
-    'quanttrio',
-    'redhatai',
-    'unsloth'
-]);
-const HF_DISCOVERY_FALLBACK = {
-    general: [
-        'Qwen/Qwen3.6-27B-FP8',
-        '0xSero/Qwen-3.5-28B-A3B-REAP',
-        '0xSero/Kimi-K2.5-PRISM-REAP-72',
-        'Qwen/Qwen3-14B-AWQ',
-        'Qwen/Qwen3.5-32B',
-        'google/gemma-4-26b-it',
-        'google/gemma-3-27b-it',
-        'unsloth/Qwen3.6-35B-A3B-UD-Q6_K_XL',
-        'Qwen/Qwen3.5-9B-GGUF'
-    ],
-    agentic: [
-        'Qwen/Qwen3.6-27B-FP8',
-        '0xSero/Qwen-3.5-28B-A3B-REAP',
-        '0xSero/Kimi-K2.5-PRISM-REAP-72',
-        'Qwen/Qwen3-14B-AWQ',
-        'google/gemma-4-26b-it',
-        'google/gemma-3-27b-it',
-        'unsloth/Qwen3.6-35B-A3B-UD-Q6_K_XL',
-        'Qwen/Qwen3.5-9B-GGUF'
-    ],
-    coding: [
-        '0xSero/qwen3-coder-next-64b-REAP',
-        'Qwen/Qwen2.5-Coder-14B-Instruct-AWQ',
-        'Qwen/Qwen3-Coder-7B',
-        'Qwen/Qwen3.5-7B-Instruct',
-        'unsloth/Qwen3.6-35B-A3B-UD-Q6_K_XL',
-        'google/gemma-4-26b-it',
-        'Qwen/Qwen3-Coder-14B-GGUF'
-    ]
-};
-const HF_DISCOVERY_FALLBACK_UNCENSORED = {
-    general: [
-        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
-        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
-    ],
-    agentic: [
-        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
-        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
-    ],
-    coding: [
-        'HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16',
-        'Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-GGUF',
-        'HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive'
-    ]
-};
+const HF_DISCOVERY_MAX_CANDIDATES = 600;
+const HF_DISCOVERY_METADATA_LIMIT = 160;
+const HF_DISCOVERY_SEARCH_CONCURRENCY = 3;
+const HF_DISCOVERY_METADATA_CONCURRENCY = 4;
+const modelMetadataCache = new Map();
+const modelSearchCache = new Map();
 
 function parseArgs(argv = []) {
     const options = {
@@ -98,7 +31,6 @@ function parseArgs(argv = []) {
         useCase: 'general',
         topN: DEFAULT_TOP_N,
         models: [],
-        uncensored: false,
         help: false,
         version: false
     };
@@ -117,10 +49,6 @@ function parseArgs(argv = []) {
         }
         if (arg === '--no-verbose') {
             options.verbose = false;
-            continue;
-        }
-        if (arg === '--uncensored') {
-            options.uncensored = true;
             continue;
         }
         if (arg === '--simulate' && next) {
@@ -186,7 +114,6 @@ Options:
   --top <n>              Show top ranked choices (default: 5, max: 10)
   --model <id-or-url>    Evaluate an explicit model candidate (repeatable)
   --models <list>        Comma-separated explicit model IDs or HF URLs
-  --uncensored           Focus discovery and ranking on uncensored / abliterated / heretic variants
   --no-verbose           Disable step-by-step progress
   -h, --help             Show this help
   -V, --version          Show package version
@@ -260,9 +187,6 @@ function displayRecommendation(recommendation) {
     console.log('\n' + chalk.bgGreen.black.bold(' MODEL RECOMMENDATION '));
     console.log(chalk.green('╭' + '─'.repeat(78)));
     console.log(chalk.green('│') + ` Use case: ${chalk.cyan.bold(recommendation.useCase)}`);
-    if (recommendation.focusUncensored) {
-        console.log(chalk.green('│') + ` Focus: ${chalk.yellow('uncensored / abliterated / heretic variants')}`);
-    }
     console.log(chalk.green('│') + ` Engine: ${chalk.white.bold(recommendation.engine.label)} ${chalk.gray(`via ${recommendation.engine.controlPlane}`)}`);
     console.log(chalk.green('│') + ` Harness: ${chalk.white.bold(recommendation.harness.name)}`);
     console.log(chalk.green('│') + ` Model: ${chalk.white.bold(recommendation.model.name)}`);
@@ -293,6 +217,12 @@ function displayRecommendation(recommendation) {
             console.log(chalk.green('│') + `        ${chalk.gray(`Label: ${candidate.runLabel} | ${candidate.runLabelReason}`)}`);
         }
     });
+    if ((recommendation.uncensoredChoices || []).length > 0) {
+        (recommendation.uncensoredChoices || []).slice(0, 5).forEach((candidate, index) => {
+            console.log(chalk.green('│') + ` Uncensored ${index + 1}: ${chalk.white(candidate.name)}`);
+            console.log(chalk.green('│') + `        ${chalk.gray(formatCandidateHeadline(candidate))}`);
+        });
+    }
     console.log(chalk.green('╰'));
 }
 
@@ -300,9 +230,6 @@ function displayModelComparison(result) {
     console.log('\n' + chalk.bgMagenta.white.bold(' MODEL COMPARISON '));
     console.log(chalk.magenta('╭' + '─'.repeat(78)));
     console.log(chalk.magenta('│') + ` Use case: ${chalk.cyan.bold(result.useCase)}`);
-    if (result.focusUncensored) {
-        console.log(chalk.magenta('│') + ` Focus: ${chalk.yellow('uncensored / abliterated / heretic variants')}`);
-    }
     console.log(chalk.magenta('│') + ` Engine lane: ${chalk.white.bold(result.engine.label)} ${chalk.gray(`via ${result.engine.controlPlane}`)}`);
     console.log(chalk.magenta('│') + ` Harness lane: ${chalk.white.bold(result.harness.name)}`);
     console.log(chalk.magenta('│') + ` Suggested context: ${chalk.white(`~${result.contextWindow} tokens`)}`);
@@ -327,6 +254,7 @@ function displayModelComparison(result) {
 function writeInstallMarkdown(recommendations = []) {
     const content = recommendations.map((recommendation) => {
         const topChoices = recommendation.topChoices || [];
+        const uncensoredChoices = recommendation.uncensoredChoices || [];
         return [
             `## ${recommendation.useCase}`,
             '',
@@ -334,7 +262,6 @@ function writeInstallMarkdown(recommendations = []) {
             `Harness: ${recommendation.harness.name}`,
             `Model: ${recommendation.model.name}`,
             `Format: ${recommendation.model.format}`,
-            recommendation.focusUncensored ? 'Focus: uncensored / abliterated / heretic variants' : '',
             `Estimated throughput: ~${recommendation.performance.tokensPerSecond} tok/s`,
             `Estimated first token: ~${recommendation.performance.firstTokenSeconds} s`,
             `Suggested context: ~${recommendation.performance.contextWindow} tokens`,
@@ -370,7 +297,12 @@ function writeInstallMarkdown(recommendations = []) {
             ...topChoices.slice(0, 5).map((item) => `- ${item.name}: ${item.tradeoff}`),
             '',
             topChoices.length > 0 ? 'Run labels:' : '',
-            ...topChoices.slice(0, 5).map((item) => `- ${item.name}: ${item.runLabel || 'unlabeled'}${item.runLabelReason ? ` - ${item.runLabelReason}` : ''}`)
+            ...topChoices.slice(0, 5).map((item) => `- ${item.name}: ${item.runLabel || 'unlabeled'}${item.runLabelReason ? ` - ${item.runLabelReason}` : ''}`),
+            '',
+            uncensoredChoices.length > 0 ? 'Best uncensored / abliterated / heretic choices:' : '',
+            ...uncensoredChoices.slice(0, 5).map((item, index) =>
+                `- ${index + 1}. ${item.name} (${item.format}, ${item.runLabel || 'unlabeled'}, score ${item.score}, fit ${item.fitLabel}, ~${item.performance.tokensPerSecond} tok/s, context ~${item.contextWindow})`
+            )
         ].filter(Boolean).join('\n');
     }).join('\n\n');
 
@@ -434,31 +366,58 @@ function applySimulation(checker, options = {}) {
 
 function fetchJson(url) {
     return new Promise((resolve, reject) => {
-        const request = https.get(url, {
-            headers: {
-                'User-Agent': 'llm-checker'
-            }
-        }, (response) => {
-            if (response.statusCode !== 200) {
-                response.resume();
-                reject(new Error(`HTTP ${response.statusCode} for ${url}`));
-                return;
-            }
+        const headers = {
+            'User-Agent': 'llm-checker'
+        };
+        const token = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN;
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+        }
 
+        const request = https.get(url, {
+            headers
+        }, (response) => {
             let body = '';
             response.setEncoding('utf8');
             response.on('data', (chunk) => { body += chunk; });
             response.on('end', () => {
+                if (response.statusCode !== 200) {
+                    const error = new Error(`HTTP ${response.statusCode} for ${url}${body ? `: ${body.slice(0, 240)}` : ''}`);
+                    error.statusCode = response.statusCode;
+                    reject(error);
+                    return;
+                }
+
                 try {
                     resolve(JSON.parse(body));
                 } catch (error) {
                     reject(error);
                 }
             });
+            if (response.statusCode !== 200) {
+                response.resume();
+            }
         });
 
         request.on('error', reject);
     });
+}
+
+async function mapWithConcurrency(items = [], limit = 4, worker = async (item) => item) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+
+    async function runNext() {
+        while (nextIndex < items.length) {
+            const currentIndex = nextIndex;
+            nextIndex += 1;
+            results[currentIndex] = await worker(items[currentIndex], currentIndex);
+        }
+    }
+
+    const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, runNext);
+    await Promise.all(workers);
+    return results;
 }
 
 function extractModelId(input = '') {
@@ -478,12 +437,16 @@ async function fetchModelMetadata(modelInput) {
         return { input: modelInput, metadata: { id: modelId || modelInput } };
     }
 
-    try {
-        const metadata = await fetchJson(`https://huggingface.co/api/models/${modelId}`);
-        return { input: modelInput, metadata };
-    } catch (error) {
-        return { input: modelInput, metadata: { id: modelId, fetchError: error.message } };
+    if (modelMetadataCache.has(modelId)) {
+        return modelMetadataCache.get(modelId);
     }
+
+    const metadataPromise = fetchJson(`https://huggingface.co/api/models/${modelId}`)
+        .then((metadata) => ({ input: modelInput, metadata }))
+        .catch((error) => ({ input: modelInput, metadata: { id: modelId, fetchError: error.message } }));
+
+    modelMetadataCache.set(modelId, metadataPromise);
+    return metadataPromise;
 }
 
 function dedupeFetchedModels(models = []) {
@@ -506,12 +469,6 @@ function dedupeFetchedModels(models = []) {
     return deduped;
 }
 
-function buildFallbackCandidatePool(useCase = 'general', options = {}) {
-    const fallbackSet = options.uncensored ? HF_DISCOVERY_FALLBACK_UNCENSORED : HF_DISCOVERY_FALLBACK;
-    const models = fallbackSet[useCase] || fallbackSet.general;
-    return models.map((modelId) => ({ input: modelId, metadata: { id: modelId, source: 'fallback-seed' } }));
-}
-
 async function searchHuggingFaceModels(params = {}) {
     const query = new URLSearchParams();
     if (params.author) query.set('author', params.author);
@@ -522,32 +479,49 @@ async function searchHuggingFaceModels(params = {}) {
     query.set('direction', params.direction || '-1');
 
     const url = `https://huggingface.co/api/models?${query.toString()}`;
-    const response = await fetchJson(url);
+    if (modelSearchCache.has(url)) {
+        return modelSearchCache.get(url);
+    }
+
+    const searchPromise = fetchJson(url).then((response) => {
+        if (!Array.isArray(response)) return [];
+        return response.map((item) => ({
+            input: item.id,
+            metadata: item
+        }));
+    });
+    modelSearchCache.set(url, searchPromise);
+    const response = await searchPromise;
     if (!Array.isArray(response)) return [];
-    return response.map((item) => ({
-        input: item.id,
-        metadata: item
-    }));
+    return response;
 }
 
 function getDiscoveryTerms(useCase = 'general', options = {}) {
     const terms = [];
 
-    if (options.uncensored) {
-        terms.push('uncensored', 'abliterated', 'heretic', 'refusal-removal', 'qwen3.6 uncensored');
-    }
+    terms.push(
+        'uncensored',
+        'abliterated',
+        'heretic',
+        'refusal-removal',
+        'instruct',
+        'chat',
+        'tool calling',
+        'function calling',
+        'agent'
+    );
 
     if (useCase === 'coding') {
-        terms.push('qwen3.6', 'qwen coder', 'coder', 'codestral', 'deepseek coder', 'devstral');
+        terms.push('coder', 'coding agent', 'software engineer', 'swe bench', 'code instruct', 'repository');
         return Array.from(new Set(terms));
     }
 
     if (useCase === 'agentic') {
-        terms.push('qwen3.6', 'qwen instruct', 'kimi', 'glm', 'llama instruct', 'gemma instruct');
+        terms.push('agentic', 'web search', 'browser use', 'research agent', 'tool use');
         return Array.from(new Set(terms));
     }
 
-    terms.push('qwen3.6', 'qwen instruct', 'llama instruct', 'mistral instruct', 'gemma instruct', 'deepseek');
+    terms.push('reasoning', 'multimodal', 'vision language', 'long context');
     return Array.from(new Set(terms));
 }
 
@@ -556,12 +530,10 @@ function buildDiscoveryQueries(useCase = 'general', options = {}) {
     const queries = [
         { filter: 'text-generation', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
         { filter: 'text-generation', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
+        { filter: 'text-generation', sort: 'likes', limit: HF_DISCOVERY_LIMIT },
         { filter: 'image-text-to-text', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
         { filter: 'image-text-to-text', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
-        { author: 'Qwen', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
-        { author: 'Qwen', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT },
-        { author: '0xSero', sort: 'downloads', limit: HF_DISCOVERY_LIMIT },
-        { author: '0xSero', sort: 'lastModified', limit: HF_DISCOVERY_LIMIT }
+        { filter: 'image-text-to-text', sort: 'likes', limit: HF_DISCOVERY_LIMIT }
     ];
 
     terms.forEach((search) => {
@@ -603,10 +575,7 @@ function matchesUncensoredFocus(item = {}) {
 }
 
 function isTrustedModelAuthor(item = {}) {
-    const metadata = item?.metadata || {};
-    const modelId = extractModelId(item?.input || metadata?.id || metadata?.modelId || '');
-    const author = getModelAuthor(modelId, metadata).toLowerCase();
-    return TRUSTED_MODEL_AUTHORS.has(author);
+    return hasCommunityTraction(item);
 }
 
 function hasCommunityTraction(item = {}) {
@@ -665,8 +634,10 @@ function isAdapterOrCheckpointRepo(item = {}) {
         'dora',
         'reward-model',
         'reranker',
+        'diffusion',
         'embedding',
-        'embeddings'
+        'embeddings',
+        'text-encoder'
     ];
 
     return blockedTokens.some((token) => tags.includes(token) || text.includes(token));
@@ -697,9 +668,6 @@ function shouldKeepDiscoveredModel(item = {}, useCase = 'general', options = {})
     if (!isRunnableModelRepo(item)) return false;
     if (isAdapterOrCheckpointRepo(item)) return false;
     if (!matchesDiscoveryUseCase(item, useCase)) return false;
-    if (options.uncensored && !matchesUncensoredFocus(item)) return false;
-    if (options.uncensored) return true;
-
     return isTrustedModelAuthor(item) || hasCommunityTraction(item);
 }
 
@@ -707,20 +675,40 @@ async function discoverCandidateModels(hardware = {}, options = {}) {
     const context = buildRecommendationContext(hardware, options);
     const searches = buildDiscoveryQueries(context.useCase, options);
 
-    const results = await Promise.allSettled(searches.map((params) => searchHuggingFaceModels(params)));
+    const results = await mapWithConcurrency(
+        searches,
+        HF_DISCOVERY_SEARCH_CONCURRENCY,
+        async (params) => {
+            try {
+                return { status: 'fulfilled', value: await searchHuggingFaceModels(params) };
+            } catch (error) {
+                return { status: 'rejected', reason: error };
+            }
+        }
+    );
     const found = results
         .filter((result) => result.status === 'fulfilled')
         .flatMap((result) => result.value)
         .filter((item) => shouldKeepDiscoveredModel(item, context.useCase, options));
 
     if (found.length === 0) {
-        return buildFallbackCandidatePool(context.useCase, options);
+        const rateLimited = results.some((result) => result.status === 'rejected' && result.reason?.statusCode === 429);
+        if (rateLimited) {
+            throw new Error('Hugging Face discovery was rate-limited. Set HF_TOKEN or HUGGINGFACE_TOKEN, then rerun the checker.');
+        }
+        throw new Error('Hugging Face discovery returned no usable model candidates. Check network access or loosen discovery filters.');
     }
 
+    const deduped = dedupeFetchedModels(found).slice(0, HF_DISCOVERY_MAX_CANDIDATES);
+    const enriched = await mapWithConcurrency(
+        deduped.slice(0, HF_DISCOVERY_METADATA_LIMIT),
+        HF_DISCOVERY_METADATA_CONCURRENCY,
+        (item) => fetchModelMetadata(item.input)
+    );
     return dedupeFetchedModels([
-        ...found,
-        ...buildFallbackCandidatePool(context.useCase, options)
-    ]).slice(0, HF_DISCOVERY_MAX_CANDIDATES);
+        ...enriched,
+        ...deduped.slice(HF_DISCOVERY_METADATA_LIMIT)
+    ]);
 }
 
 async function main() {
@@ -746,7 +734,7 @@ async function main() {
     const hardware = await checker.getSystemInfo();
     if (options.models.length > 0) {
         const fetchedModels = await Promise.all(options.models.map(fetchModelMetadata));
-        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: options.topN, uncensored: options.uncensored });
+        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: options.topN });
         comparison.rankedCandidates = comparison.rankedCandidates.slice(0, options.topN);
         comparison.selected = comparison.rankedCandidates[0] || comparison.selected;
 
@@ -760,11 +748,10 @@ async function main() {
     }
 
     const recommendations = await Promise.all(['agentic', 'coding', 'general'].map(async (useCase) => {
-        const discoveredModels = await discoverCandidateModels(hardware, { useCase, uncensored: options.uncensored });
+        const discoveredModels = await discoverCandidateModels(hardware, { useCase });
         return getGuideStackRecommendation(hardware, {
             useCase,
             topN: options.topN,
-            uncensored: options.uncensored,
             discoveredModels
         });
     }));

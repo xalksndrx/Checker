@@ -77,6 +77,7 @@ function getSignals(hardware = {}, options = {}) {
         isTermuxEnvironment(rawPlatform, options.env || process.env) ||
         includesAny(`${systemModel} ${cpuBrand}`, ['phone', 'pixel', 'galaxy', 'snapdragon', 'dimensity']);
     const isNvidia = includesAny(combinedGpuText, ['nvidia', 'geforce', 'rtx', 'gtx', 'quadro', 'tesla', 'a100', 'h100', 'a6000', 'rtx 6000']);
+    const isBlackwell = includesAny(combinedGpuText, ['blackwell', 'b200', 'b300', 'gb200', 'gb300', 'rtx 50', 'rtx 5090', 'rtx 5080', 'rtx 5070']);
     const isAMD = includesAny(combinedGpuText, ['amd', 'radeon', 'instinct', 'rx ']);
     const isIntelGpu = includesAny(combinedGpuText, ['intel', 'arc', 'iris', 'uhd']);
     return {
@@ -96,6 +97,7 @@ function getSignals(hardware = {}, options = {}) {
         isLinux: platform === 'linux',
         isWindows: platform === 'win32',
         isNvidia,
+        isBlackwell,
         isAMD,
         isIntelGpu,
         hasDedicatedGpu,
@@ -189,9 +191,20 @@ function slugifyFamily(text = '') {
         .replace(/^-+|-+$/g, '') || 'model';
 }
 
+function getRuntimeModelRef(model = {}) {
+    const name = model.name || '';
+    const format = String(model.format || '');
+    const ggufQuant = format.match(/\b(I?Q\d(?:_[A-Z0-9]+)+|Q\d(?:_[A-Z0-9]+)+)\b/i);
+    if (name && format.toLowerCase().includes('gguf') && ggufQuant) {
+        return `${name}:${ggufQuant[1].toUpperCase()}`;
+    }
+    return name;
+}
+
 function fillTemplate(template, model = {}, harness = {}) {
     const values = {
         model: model.name || '',
+        modelRef: getRuntimeModelRef(model),
         family: model.family || 'model',
         familySlug: slugifyFamily(model.family || 'model'),
         modelFile: slugifyFamily(model.family || 'model'),
@@ -335,15 +348,9 @@ function estimateModelSizeB(model = {}) {
 
     const text = `${model.name || ''} ${model.family || ''}`;
 
-    if (/gemma-4-e4b/i.test(text)) return 8;
     const match = text.match(/(\d+(?:\.\d+)?)B/i);
     if (match) return Number(match[1]);
 
-    if (/kimi-k2\.5/i.test(text)) return 72;
-    if (/coder-next/i.test(text)) return 32;
-    if (/gemma-3-27/i.test(text)) return 27;
-    if (/gemma-3-12/i.test(text)) return 12;
-    if (/gemma-3-4/i.test(text)) return 4;
     return 9;
 }
 
@@ -368,7 +375,7 @@ function estimateQualityClassSizeB(model = {}) {
     const active = estimateActiveModelSizeB(model);
     if (!Number.isFinite(active) || active <= 0) return total;
 
-    return Number(Math.min(total, (active * 2) + (total * 0.4)).toFixed(1));
+    return Number(Math.min(total, (active * 5) + (total * 0.55)).toFixed(1));
 }
 
 function estimateSpeedClassSizeB(model = {}) {
@@ -512,21 +519,28 @@ function getHostOffloadHeadroomGB(context = {}) {
 function getUseCaseAffinity(model = {}, useCase = 'general') {
     const text = `${model.name || ''} ${model.family || ''}`.toLowerCase();
     const isCoder = text.includes('coder');
+    const isAgentModel = text.includes('agent') || text.includes('tool') || text.includes('function') || text.includes('search') || text.includes('browser');
+    const isVisionModel = text.includes('vision') || text.includes('vl') || text.includes('image') || text.includes('multimodal');
     const isInstruct = text.includes('instruct');
 
     if (useCase === 'coding') {
-        if (isCoder) return 12;
+        if (isCoder && isAgentModel) return 18;
+        if (isCoder) return 16;
+        if (isAgentModel) return 14;
         if (isInstruct) return 3;
         return 0;
     }
 
     if (useCase === 'agentic') {
-        if (isCoder) return 5;
+        if (isAgentModel) return 15;
+        if (isCoder) return 10;
         if (isInstruct) return 8;
         return 8;
     }
 
     if (useCase === 'general') {
+        if (isInstruct && isVisionModel) return 13;
+        if (isInstruct && isAgentModel) return 12;
         if (isInstruct) return 8;
         if (isCoder) return 2;
         return 8;
@@ -536,9 +550,6 @@ function getUseCaseAffinity(model = {}, useCase = 'general') {
 }
 
 function getSourcePreference(model = {}) {
-    const text = `${model.name || ''} ${model.source || ''}`.toLowerCase();
-    if (text.includes('0xsero')) return 9;
-    if (text.includes('qwen/') || text.includes('google/') || text.includes('meta-llama/')) return 3;
     return 0;
 }
 
@@ -577,16 +588,10 @@ function getFreshnessPreference(model = {}) {
     return 0;
 }
 
-function getCautionPenalty(model = {}, context = {}) {
-    if (context.focusUncensored) return 0;
+function getCautionPenalty(model = {}) {
     const flags = Array.isArray(model.cautionFlags) ? model.cautionFlags : [];
     if (flags.length === 0) return 0;
     return Math.min(9, flags.length * 3);
-}
-
-function getUncensoredPreference(model = {}, context = {}) {
-    if (!context.focusUncensored) return 0;
-    return matchesUncensoredFocus(model) ? 10 : -12;
 }
 
 function getEngineFormatPreference(model = {}, context = {}) {
@@ -595,6 +600,7 @@ function getEngineFormatPreference(model = {}, context = {}) {
 
     if (engine === 'vllm') {
         if (format.includes('gguf') || format.includes('mlx')) return -18;
+        if (format.includes('nvfp4') && !context.isBlackwell) return -10;
         if (format.includes('awq') || format.includes('gptq') || format.includes('w4a16') || format.includes('reap') || format.includes('fp8') || format.includes('nvfp4') || format.includes('native') || format.includes('bf16') || format.includes('f16')) return 6;
         return 0;
     }
@@ -711,6 +717,10 @@ function buildTradeoffSummary(model = {}, context = {}, performance = {}, fit = 
         parts.push('uncensored variant');
     }
 
+    if (String(model.format || '').toLowerCase().includes('nvfp4') && !context.isBlackwell) {
+        parts.push('NVFP4 should be benchmarked on non-Blackwell NVIDIA GPUs');
+    }
+
     return parts.join('; ');
 }
 
@@ -720,6 +730,13 @@ function classifyRunLabel(model = {}, context = {}, fit = {}, performance = {}) 
         return {
             label: 'format mismatch',
             reason: mismatchReason
+        };
+    }
+
+    if (String(model.format || '').toLowerCase().includes('nvfp4') && !context.isBlackwell) {
+        return {
+            label: 'experimental',
+            reason: 'NVFP4 checkpoints are optimized for Blackwell-class NVIDIA hardware; benchmark this on Ada/Ampere before relying on it.'
         };
     }
 
@@ -759,11 +776,10 @@ function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
     const popularityPreference = getPopularityPreference(model);
     const freshnessPreference = getFreshnessPreference(model);
     const cautionPenalty = getCautionPenalty(model, context);
-    const uncensoredPreference = getUncensoredPreference(model, context);
     const formatPreference = getEngineFormatPreference(model, context);
     const sizeScore = Math.min(modelSizeB, 72) / 2;
     const fit = classifyFit(model, context);
-    const score = Number((sizeScore + useCaseAffinity + sourcePreference + popularityPreference + freshnessPreference + uncensoredPreference + formatPreference + fit.fitScore - cautionPenalty + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
+    const score = Number((sizeScore + useCaseAffinity + sourcePreference + popularityPreference + freshnessPreference + formatPreference + fit.fitScore - cautionPenalty + (model.name === primaryName ? 1.5 : 0)).toFixed(1));
 
     return {
         ...model,
@@ -782,6 +798,16 @@ function scoreModelCandidate(model = {}, context = {}, primaryName = '') {
 function choosePreferredDefaultCandidate(rankedCandidates = [], context = {}) {
     if (rankedCandidates.length === 0) return null;
 
+    const topCandidate = rankedCandidates[0];
+    if (
+        context.engine === 'llama.cpp' &&
+        Number(context.totalRam || 0) >= 96 &&
+        ['hybrid-offload', 'gpu-resident'].includes(topCandidate.fitMode) &&
+        !getFormatMismatchReason(topCandidate, context)
+    ) {
+        return topCandidate;
+    }
+
     const gpuResidentCandidates = rankedCandidates.filter((candidate) =>
         candidate.fitMode === 'gpu-resident' && !getFormatMismatchReason(candidate, context)
     );
@@ -790,7 +816,6 @@ function choosePreferredDefaultCandidate(rankedCandidates = [], context = {}) {
         return rankedCandidates[0];
     }
 
-    const topCandidate = rankedCandidates[0];
     if (topCandidate.fitMode === 'gpu-resident' && !getFormatMismatchReason(topCandidate, context)) {
         return topCandidate;
     }
@@ -798,23 +823,17 @@ function choosePreferredDefaultCandidate(rankedCandidates = [], context = {}) {
     return gpuResidentCandidates[0];
 }
 
-function filterCandidatesForFocus(candidates = [], context = {}) {
-    if (!context.focusUncensored) return candidates;
-
-    const focusedCandidates = candidates.filter((candidate) => matchesUncensoredFocus(candidate));
-    return focusedCandidates.length > 0 ? focusedCandidates : candidates;
-}
-
 function rankModelCandidates(policy = {}, context = {}, primary = {}, discoveredCandidates = []) {
-    const candidates = filterCandidatesForFocus(dedupeModels([
-        primary,
+    const primaryModels = primary?.name ? [primary] : [];
+    const candidates = dedupeModels([
+        ...primaryModels,
         ...getGuideModelCandidates(policy, context),
         ...getMatchingAlternativeCandidates(policy, context),
         ...discoveredCandidates
-    ]), context);
+    ]);
 
     return candidates
-        .map((model) => scoreModelCandidate(model, context, primary.name))
+        .map((model) => scoreModelCandidate(model, context, primary?.name || ''))
         .sort((left, right) => right.score - left.score);
 }
 
@@ -848,16 +867,16 @@ function buildFrontierComparison(model = {}, context = {}) {
 function buildModelReason(selectedModel = {}, primaryModel = {}, selectionContext = {}) {
     if (selectedModel.reason) return selectedModel.reason;
 
-    if (selectionContext.focusUncensored && matchesUncensoredFocus(selectedModel)) {
-        return 'This uncensored shortlist pick stayed ahead after scoring fit, recency, and use-case alignment.';
+    if (!primaryModel?.name) {
+        return 'This model led the live Hugging Face discovery results after scoring hardware fit, use-case alignment, recency, popularity, and runtime compatibility.';
     }
 
-    if (selectedModel.name === primaryModel.name) {
+    if (primaryModel?.name && selectedModel.name === primaryModel.name) {
         return 'This model stayed ahead after scoring fit, use-case alignment, and source preference across the compatible shortlist.';
     }
 
     if (`${selectedModel.name} ${selectedModel.source || ''}`.toLowerCase().includes('0xsero')) {
-        return 'A fitting 0xSero build outranked the conservative default once shortlist scoring and source preference were applied.';
+        return 'This community build outranked the conservative default once shortlist scoring and source preference were applied.';
     }
 
     return `This alternative outranked the conservative default for ${selectionContext.useCase || 'the current'} work once shortlist scoring was applied.`;
@@ -867,9 +886,8 @@ function buildRecommendationContext(hardware = {}, options = {}) {
     const policy = loadGuidePolicy();
     const signals = getSignals(hardware, options);
     const useCase = normalizeUseCase(options.useCase || options.category || 'general');
-    const focusUncensored = Boolean(options.uncensored);
 
-    const baseContext = { ...signals, useCase, focusUncensored };
+    const baseContext = { ...signals, useCase };
     const engine = chooseEngine(policy, baseContext);
     const harness = chooseHarness(policy, baseContext);
     const selectionContext = {
@@ -925,18 +943,11 @@ function chooseHarness(policy = {}, context = {}) {
 
 function chooseModel(policy = {}, context = {}, discoveredCandidates = []) {
     const rule = chooseRule(policy.rules?.model || [], context);
-    if (!rule) {
-        throw new Error(`No model rule matched from ${GUIDE_SOURCE}`);
-    }
-
-    const primaryModel = pickUseCaseValue(rule.value, context.useCase);
-    if (!primaryModel || !primaryModel.name) {
-        throw new Error(`Invalid model rule in ${GUIDE_SOURCE}`);
-    }
+    const primaryModel = rule ? pickUseCaseValue(rule.value, context.useCase) : {};
 
     const rankedCandidates = rankModelCandidates(policy, context, primaryModel, discoveredCandidates);
     if (rankedCandidates.length === 0) {
-        throw new Error(`Could not rank model candidates from ${GUIDE_SOURCE}`);
+        throw new Error('Could not rank model candidates from Hugging Face discovery results');
     }
 
     const selectedCandidate = choosePreferredDefaultCandidate(rankedCandidates, context) || rankedCandidates[0];
@@ -947,7 +958,7 @@ function chooseModel(policy = {}, context = {}, discoveredCandidates = []) {
 
     return {
         selected: selectedCandidate,
-        primary: primaryModel,
+        primary: primaryModel?.name ? primaryModel : {},
         rankedCandidates: orderedCandidates
     };
 }
@@ -984,6 +995,9 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         };
     });
     const topChoices = rankedCandidates.slice(0, Math.max(1, Number(options.topN) || 5));
+    const uncensoredChoices = rankedCandidates
+        .filter((candidate) => matchesUncensoredFocus(candidate))
+        .slice(0, Math.max(1, Number(options.topN) || 5));
     const alternatives = topChoices.filter((item) => item.name !== model.name).slice(0, 4);
     const notes = buildNotes(policy, selectionContext);
     const frontierComparison = buildFrontierComparison(model, selectionContext);
@@ -992,7 +1006,6 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         guideVersion: policy.version || 'unknown',
         guideSource: GUIDE_SOURCE,
         useCase,
-        focusUncensored: Boolean(selectionContext.focusUncensored),
         platform: {
             normalized: signals.platform,
             raw: signals.rawPlatform || signals.platform,
@@ -1004,6 +1017,7 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
         primaryModel: modelChoice.primary,
         candidates: rankedCandidates,
         topChoices,
+        uncensoredChoices,
         alternatives,
         performance,
         links,
@@ -1024,7 +1038,7 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
             buildModelReason(model, modelChoice.primary, selectionContext),
             harness.reason,
             model.name !== modelChoice.primary.name
-                ? `Picked from a scored Hugging Face shortlist instead of the conservative default; 0xSero gets a preference bonus unless fit or use-case makes it a clear loser.`
+                ? `Picked from a scored Hugging Face shortlist instead of the conservative default.`
                 : `Scored against the compatible Hugging Face shortlist and still won on fit, use-case, and source preference.`
         ]
     };
@@ -1040,10 +1054,7 @@ function rankExplicitModelCandidates(hardware = {}, modelInputs = [], options = 
         selectionContext
     } = buildRecommendationContext(hardware, options);
 
-    const candidates = filterCandidatesForFocus(
-        dedupeModels(modelInputs.map((item) => buildModelCandidate(item.input || item, item.metadata || {}))),
-        selectionContext
-    );
+    const candidates = dedupeModels(modelInputs.map((item) => buildModelCandidate(item.input || item, item.metadata || {})));
     const rankedCandidates = candidates
         .map((model) => scoreModelCandidate(model, selectionContext, ''))
         .sort((left, right) => right.score - left.score)
@@ -1069,7 +1080,6 @@ function rankExplicitModelCandidates(hardware = {}, modelInputs = [], options = 
         guideVersion: policy.version || 'unknown',
         guideSource: GUIDE_SOURCE,
         useCase,
-        focusUncensored: Boolean(selectionContext.focusUncensored),
         engine,
         harness,
         contextWindow,

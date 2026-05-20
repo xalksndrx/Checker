@@ -9,6 +9,13 @@ npm install
 node bin/checker.js
 ```
 
+For heavier live discovery, set a Hugging Face token so the API does not throttle anonymous searches:
+
+```bash
+export HF_TOKEN="hf_..."
+node bin/checker.js
+```
+
 That single run prints:
 
 - your hardware summary
@@ -19,6 +26,7 @@ That single run prints:
 - harness
 - primary Hugging Face model
 - top ranked 3-5 model choices for each lane
+- best uncensored / abliterated / heretic choices when discovered
 - run labels such as `confirmed`, `likely`, `experimental`, or `format mismatch`
 - tradeoff notes for quality, speed, fit, and context headroom
 - estimated `tok/s`
@@ -26,8 +34,6 @@ That single run prints:
 - suggested context window
 
 It also overwrites [`install.md`](./install.md) with an agent-ready install plan.
-
-If you want the checker to focus specifically on uncensored variants, add `--uncensored`. That mode narrows discovery and ranking toward repos tagged or named with signals such as `uncensored`, `abliterated`, `heretic`, or `refusal-removal`.
 
 ## Root Files
 
@@ -65,36 +71,21 @@ Compare explicit model links or repo IDs against the current machine:
 
 ```bash
 node bin/checker.js --use-case general \
-  --models https://huggingface.co/Qwen/Qwen3-14B-AWQ,https://huggingface.co/OBLITERATUS/gemma-4-E4B-it-OBLITERATED
+  --models https://huggingface.co/org/model-one,https://huggingface.co/org/model-two
 ```
 
 Or repeat `--model`:
 
 ```bash
 node bin/checker.js --use-case coding \
-  --model Qwen/Qwen2.5-Coder-14B-Instruct-AWQ \
-  --model https://huggingface.co/Qwen/Qwen3-Coder-7B
+  --model org/model-one \
+  --model https://huggingface.co/org/model-two
 ```
 
 Limit the recommendation list:
 
 ```bash
 node bin/checker.js --top 5
-```
-
-Focus on uncensored / abliterated / heretic variants:
-
-```bash
-node bin/checker.js --uncensored
-node bin/checker.js --use-case general --uncensored --top 10
-```
-
-Compare explicit uncensored candidates on your current machine:
-
-```bash
-node bin/checker.js --uncensored --use-case general \
-  --model HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Balanced \
-  --model Youssofal/Qwen3.6-27B-Abliterated-Heretic-Uncensored-BF16
 ```
 
 That comparison mode:
@@ -115,19 +106,14 @@ It:
 1. detects hardware
 2. applies the rules in [`guide.md`](./guide.md)
 3. chooses engine and harness for `agentic`, `coding`, and `general`
-4. discovers and ranks candidate models from Hugging Face when possible, with seeded fallback candidates when offline
-5. prefers 0xSero models when they fit well, but keeps the ranking open to the broader Hugging Face pool
+4. discovers and ranks candidate models from live Hugging Face search results
+5. prefers the strongest practical one-model setup for the detected hardware before narrower specialist or offload experiments
 6. estimates expected performance and context tradeoffs
 7. writes [`install.md`](./install.md)
 
-The recommendations are guide-driven and hardware-aware. They are not limited to 0xSero models. 0xSero Hugging Face releases still get a preference boost when they fit the hardware well, but they no longer crowd out stronger options from the wider Hugging Face pool.
+The recommendations are guide-driven and hardware-aware, but the model candidates are discovery-first. The checker searches Hugging Face live for strong general, coding, agentic, tool-use, multimodal, and uncensored variants, then ranks what it finds against the detected hardware and selected runtime.
 
-With `--uncensored`, the checker changes both discovery and ranking:
-
-- discovery adds uncensored-focused Hugging Face searches
-- matching repos must look like runnable model repos, not adapters or checkpoints
-- ranking prefers uncensored / abliterated / heretic / refusal-removal variants instead of penalizing them
-- the mode still checks fit, format compatibility, and context headroom against your hardware
+Discovery is live and broad, not a hardcoded model list: it queries Hugging Face by task filters, popularity, recency, likes, and use-case terms, dedupes the results, enriches top candidates with repo metadata, and scores the bounded candidate pool locally. It is not a literal crawl of every Hugging Face repo on every run, because that would be slow, rate-limited, and unsuitable for a hosted app.
 
 Current CLI options:
 
@@ -141,7 +127,6 @@ Current CLI options:
 --top <n>              Show top ranked choices (default: 5, max: 10)
 --model <id-or-url>    Evaluate an explicit model candidate (repeatable)
 --models <list>        Comma-separated explicit model IDs or HF URLs
---uncensored           Focus discovery and ranking on uncensored / abliterated / heretic variants
 --no-verbose           Disable step-by-step progress
 -h, --help             Show this help
 -V, --version          Show package version

@@ -7,11 +7,12 @@ It is intentionally biased toward:
 - stable, direct runtimes
 - repeatable benchmarking
 - realistic context sizing
-- conservative first picks on 24 GB VRAM systems
+- discovery-first, quality-first picks on 24 GB VRAM systems
+- explicit separation between the best one-model default and secondary runtime experiments
 
 The goal is not to chase the most aggressive possible setup on day one. The goal is to get a clean, useful local server working first, then expand deliberately.
 
-This guide should help an agent or human choose:
+This guide should help an agent, human, or hosted UI choose:
 
 - the backend/runtime
 - the harness or client
@@ -41,8 +42,8 @@ Interpretation rules:
 Practical VRAM rules of thumb:
 
 - under 16 GB VRAM: stay in smaller models or use heavier offload
-- 24 GB VRAM: treat 7B to 14B dense models as the safe baseline
-- 24 GB VRAM: larger quantized or pruned MoE models are experiments, not the default baseline
+- 24 GB VRAM: prefer the best discovered all-purpose quantized model that fits before narrower coder-specialists
+- 24 GB VRAM plus 96GB+ system RAM: larger GGUF MoE models become viable experiments through host-RAM offload, not the default one-model answer
 - 24 GB VRAM: the first recommended model should fit without CPU weight offload or other rescue-path tricks
 - 48 GB+ effective GPU memory on Linux: opens the door to larger vLLM serving targets
 - Apple Silicon: treat unified memory differently and prefer MLX first
@@ -88,7 +89,8 @@ Pick one runtime first. Do not introduce a control-plane layer unless there is a
 ### Agent rules for backend choice
 
 - Linux + NVIDIA + multi-GPU or very large effective GPU memory: prefer `vLLM`
-- Linux + single 24 GB NVIDIA box: prefer `vLLM` first if the goal is a stable local server and benchmark baseline
+- Linux + single 24 GB NVIDIA box: prefer `vLLM` first for the best one-model setup when a strong vLLM-compatible quant fits
+- Linux + single 24 GB NVIDIA box + 96GB+ RAM: compare a `llama.cpp` GGUF offload lane only after the best vLLM-compatible one-model baseline is measured
 - Linux + single NVIDIA box + explicit speed-first priority: `exllamav3` can be a later comparison target
 - Mac / Apple Silicon: prefer `MLX`, then `llama.cpp` if needed
 - CPU-heavy, mixed, portable, or low-VRAM systems: prefer `llama.cpp`
@@ -127,8 +129,8 @@ Use them with discipline:
 
 ### Conservative model sizing rules
 
-- 24 GB single GPU baseline: 7B to 14B dense models
-- 24 GB single GPU experiments: larger quantized or pruned MoE models, with conservative context
+- 24 GB single GPU baseline: the highest-scoring discovered all-purpose quantized model that fits
+- 24 GB single GPU experiments: discovered coder-specialist, GGUF/offload, and alternate quantization candidates with conservative context
 - do not treat a pruned REAP release as a 4-bit quant unless the model card explicitly says a real low-bit quant such as `W4A16`, `AWQ`, or `4-bit`
 - lower-memory or CPU-first systems: smaller GGUF models
 - BF16 / FP16: only when hardware actually supports it comfortably
@@ -222,6 +224,8 @@ Step-by-step:
 Selection logic:
 
 - if Linux + NVIDIA + stable serving priority: choose `vLLM`
+- if Linux + NVIDIA + 24 GB VRAM + best one-model quality priority: choose the strongest vLLM-compatible quantized model that fits
+- if Linux + NVIDIA + 24 GB VRAM + 96GB+ RAM: test `llama.cpp` GGUF offload only as a secondary comparison lane
 - if CPU / mixed portability / GGUF-first: choose `llama.cpp`
 - if Apple Silicon: choose `MLX`
 - if explicit single-GPU speed experiment: choose `exllamav3`
@@ -236,17 +240,18 @@ Model logic:
 
 ### Example: 1x RTX 4090, 24 GB VRAM, 128 GB RAM, Linux
 
-- backend: `vLLM`
+- backend: `vLLM` for the default best one-model lane
+- backend: `llama.cpp` only for host-RAM offload comparisons
 - harness: any client that can hit `http://localhost:8000/v1`
-- baseline model lane: 7B to 14B dense
-- larger model lane: later experiments only
+- baseline model lane: highest-scoring discovered all-purpose quantized model
+- comparison lane: discovered coder-specialist, uncensored, GGUF/offload, and alternate quantization candidates
 - benchmark posture: fixed context, fixed sampling, one request at a time
 
 Reasoning:
 
 - 24 GB VRAM is the main constraint
-- 128 GB RAM improves system comfort but does not remove the VRAM bottleneck
-- the first priority should be a stable direct `vLLM` server, not a speed-maximized single-GPU stack
+- 128 GB RAM does not turn the 4090 into a 128 GB GPU, but it does make GGUF offload experiments legitimate after the default baseline
+- the first priority should be the strongest single model that fits cleanly and serves through a stable API
 
 ### Example: CPU-only or portability-first machine
 
@@ -262,7 +267,6 @@ Reasoning:
 
 ## 9. Resources
 
-- 0xSero Hugging Face: https://huggingface.co/0xSero
 - vLLM: https://github.com/vllm-project/vllm
 - llama.cpp: https://github.com/ggml-org/llama.cpp
 - SGLang: https://github.com/sgl-project/sglang
@@ -278,7 +282,7 @@ The tool reads the JSON block below at runtime. Update this block when you want 
 
 ```json
 {
-  "version": "v2026.04",
+  "version": "v2026.05",
   "engines": {
     "vllm": {
       "key": "vllm",
@@ -287,9 +291,9 @@ The tool reads the JSON block below at runtime. Update this block when you want 
       "apiShape": "OpenAI-compatible server on :8000",
       "link": "https://github.com/vllm-project/vllm",
       "commands": {
-        "install": "pip install -U \"vllm>=0.6.0\"",
+        "install": "pip install -U \"vllm>=0.15.0\"",
         "fetch": "huggingface-cli download \"{{model}}\"",
-        "serve": "python -m vllm.entrypoints.openai.api_server --model \"{{model}}\" --host 0.0.0.0 --port 8000"
+        "serve": "vllm serve \"{{model}}\" --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.92"
       }
     },
     "llama.cpp": {
@@ -299,9 +303,9 @@ The tool reads the JSON block below at runtime. Update this block when you want 
       "apiShape": "OpenAI-compatible llama-server endpoint",
       "link": "https://github.com/ggml-org/llama.cpp",
       "commands": {
-        "install": "Build or install llama.cpp with server support",
+        "install": "Build or install llama.cpp with CUDA server support",
         "fetch": "huggingface-cli download \"{{model}}\"",
-        "serve": "llama-server -m \"./models/{{modelFile}}.gguf\" --host 0.0.0.0 --port 8000"
+        "serve": "llama-server -hf \"{{modelRef}}\" --host 0.0.0.0 --port 8000"
       }
     },
     "mlx": {
@@ -346,27 +350,55 @@ The tool reads the JSON block below at runtime. Update this block when you want 
   "rules": {
     "engine": [
       {
-        "when": { "isPhone": true },
+        "when": {
+          "isPhone": true
+        },
         "value": "llama.cpp",
         "reason": "Phone and Termux-class hardware needs the most portable GGUF runtime with CPU/shared-memory tolerance."
       },
       {
-        "when": { "isApple": true },
+        "when": {
+          "isApple": true
+        },
         "value": "mlx",
         "reason": "Apple Silicon should prefer MLX first, with llama.cpp as the fallback path."
       },
       {
-        "when": { "isLinux": true, "isNvidia": true, "any": [ { "dedicatedGpuCount": { "gt": 1 } }, { "effectiveMemory": { "gte": 48 } } ] },
+        "when": {
+          "isLinux": true,
+          "isNvidia": true,
+          "any": [
+            {
+              "dedicatedGpuCount": {
+                "gt": 1
+              }
+            },
+            {
+              "effectiveMemory": {
+                "gte": 48
+              }
+            }
+          ]
+        },
         "value": "vllm",
         "reason": "Linux plus multi-GPU or very large effective GPU memory should standardize on vLLM."
       },
       {
-        "when": { "isLinux": true, "isNvidia": true, "vram": { "gte": 20 } },
+        "when": {
+          "isLinux": true,
+          "isNvidia": true,
+          "vram": {
+            "gte": 20
+          }
+        },
         "value": "vllm",
-        "reason": "A single 24GB-class NVIDIA Linux box should start with direct vLLM for a stable benchmark baseline."
+        "reason": "A single 24GB-class NVIDIA Linux box should use direct vLLM for the best one-model baseline when a strong quantized model fits."
       },
       {
-        "when": { "isAMD": true, "hasDedicatedGpu": true },
+        "when": {
+          "isAMD": true,
+          "hasDedicatedGpu": true
+        },
         "value": "llama.cpp",
         "reason": "AMD is best handled by the broad-compatibility path unless there is a specific ROCm serving reason."
       },
@@ -378,22 +410,37 @@ The tool reads the JSON block below at runtime. Update this block when you want 
     ],
     "harness": [
       {
-        "when": { "isPhone": true },
+        "when": {
+          "isPhone": true
+        },
         "value": "OpenCode",
         "reason": "Phone workflows benefit from the lightest onboarding path and straightforward local endpoint support."
       },
       {
-        "when": { "cpuOnly": true },
+        "when": {
+          "cpuOnly": true
+        },
         "value": "Pi",
         "reason": "CPU-only systems benefit from Pi's minimal context bloat and strong token caching."
       },
       {
-        "when": { "hasDedicatedGpu": false, "totalRam": { "lte": 16 } },
+        "when": {
+          "hasDedicatedGpu": false,
+          "totalRam": {
+            "lte": 16
+          }
+        },
         "value": "Pi",
         "reason": "Lower-memory systems benefit from Pi's minimal context bloat and strong token caching."
       },
       {
-        "when": { "useCase": ["agentic", "coding", "reasoning"] },
+        "when": {
+          "useCase": [
+            "agentic",
+            "coding",
+            "reasoning"
+          ]
+        },
         "value": "Droid",
         "reason": "Droid is the default harness for coding and agentic workflows."
       },
@@ -403,246 +450,61 @@ The tool reads the JSON block below at runtime. Update this block when you want 
         "reason": "Droid is the default harness unless the user needs a lighter path."
       }
     ],
-    "model": [
-      {
-        "when": { "isPhone": true, "totalRam": { "gte": 12 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-9B",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5",
-            "source": "Hugging Face GGUF build",
-            "reason": "Phone-class memory budgets should stay in a small GGUF target."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3.5-9B",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5-Coder",
-            "source": "Hugging Face GGUF build",
-            "reason": "Phone-class memory budgets should stay in a small GGUF target."
-          }
-        }
-      },
-      {
-        "when": { "isPhone": true },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-4B",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5",
-            "source": "Hugging Face GGUF build",
-            "reason": "Phone-class memory budgets should stay in a very small GGUF target."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3.5-4B",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5-Coder",
-            "source": "Hugging Face GGUF build",
-            "reason": "Phone-class memory budgets should stay in a very small GGUF target."
-          }
-        }
-      },
-      {
-        "when": { "engine": "vllm", "isNvidia": true, "vram": { "gte": 20 }, "useCase": ["agentic", "general"] },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3-14B-AWQ",
-            "format": "AWQ 4-bit",
-            "family": "Qwen3",
-            "source": "Qwen on Hugging Face",
-            "reason": "A 24GB NVIDIA baseline should start with an officially quantized 14B model that fits without offload."
-          }
-        }
-      },
-      {
-        "when": { "engine": "vllm", "isNvidia": true, "vram": { "gte": 20 }, "useCase": "coding" },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen2.5-Coder-14B-Instruct-AWQ",
-            "format": "AWQ 4-bit",
-            "family": "Qwen2.5-Coder",
-            "source": "Qwen on Hugging Face",
-            "reason": "A 24GB NVIDIA coding baseline should start with an officially quantized 14B coder model."
-          }
-        }
-      },
-      {
-        "when": { "engine": "vllm", "effectiveMemory": { "gte": 48 }, "useCase": ["agentic", "general"] },
-        "value": {
-          "default": {
-            "name": "0xSero/Kimi-K2.5-PRISM-REAP-72",
-            "format": "REAP + AutoRound W4A16",
-            "family": "Kimi-K2.5",
-            "source": "0xSero on Hugging Face",
-            "reason": "Large Linux GPU boxes can step into heavier REAP and MoE deployments."
-          }
-        }
-      },
-      {
-        "when": { "engine": "vllm", "effectiveMemory": { "gte": 48 }, "useCase": "coding" },
-        "value": {
-          "default": {
-            "name": "0xSero/qwen3-coder-next-64b-REAP",
-            "format": "REAP",
-            "family": "Qwen3-Coder-Next",
-            "source": "0xSero on Hugging Face",
-            "reason": "Large Linux GPU boxes can step into heavier coder-focused REAP deployments."
-          }
-        }
-      },
-      {
-        "when": { "engine": "mlx", "totalRam": { "gte": 48 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-32B",
-            "format": "MLX 4-bit",
-            "family": "Qwen3.5",
-            "source": "Hugging Face MLX conversion",
-            "reason": "48GB-class Apple Silicon can carry a 32B-range MLX model comfortably."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3-Coder-Next",
-            "format": "MLX 4-bit",
-            "family": "Qwen3-Coder-Next",
-            "source": "Hugging Face MLX conversion",
-            "reason": "48GB-class Apple Silicon can carry a larger coding model with reasonable headroom."
-          }
-        }
-      },
-      {
-        "when": { "engine": "mlx", "totalRam": { "gte": 24 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-14B",
-            "format": "MLX 4-bit",
-            "family": "Qwen3.5",
-            "source": "Hugging Face MLX conversion",
-            "reason": "24GB Apple Silicon fits a mid-tier native MLX path."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3-Coder-Next",
-            "format": "MLX 4-bit",
-            "family": "Qwen3-Coder-Next",
-            "source": "Hugging Face MLX conversion",
-            "reason": "24GB Apple Silicon can handle a mid-tier coding model via MLX."
-          }
-        }
-      },
-      {
-        "when": { "engine": "mlx" },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-9B",
-            "format": "MLX 4-bit",
-            "family": "Qwen3.5",
-            "source": "Hugging Face MLX conversion",
-            "reason": "16GB-class Apple Silicon should stay in the 7B-9B range."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3.5-9B",
-            "format": "MLX 4-bit",
-            "family": "Qwen3.5-Coder",
-            "source": "Hugging Face MLX conversion",
-            "reason": "16GB-class Apple Silicon should stay in the 7B-9B range."
-          }
-        }
-      },
-      {
-        "when": { "engine": "exllamav3", "hasDedicatedGpu": true, "vram": { "gte": 12 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-14B",
-            "format": "EXL2 4.0bpw",
-            "family": "Qwen3.5",
-            "source": "Hugging Face EXL2 build",
-            "reason": "Single-GPU speed-focused systems should use EXL-class quants when that engine is chosen deliberately."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3-Coder-Next",
-            "format": "EXL2 4.0bpw",
-            "family": "Qwen3-Coder-Next",
-            "source": "Hugging Face EXL2 build",
-            "reason": "Single-GPU speed-focused systems should use EXL-class quants when that engine is chosen deliberately."
-          }
-        }
-      },
-      {
-        "when": { "engine": "llama.cpp", "totalRam": { "gte": 24 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-14B-Instruct-GGUF",
-            "format": "GGUF Q5_K_M",
-            "family": "Qwen3.5",
-            "source": "Hugging Face GGUF build",
-            "reason": "24GB system RAM is a solid llama.cpp target for 12B-14B quantized models."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3-Coder-14B-GGUF",
-            "format": "GGUF Q5_K_M",
-            "family": "Qwen3-Coder",
-            "source": "Hugging Face GGUF build",
-            "reason": "24GB system RAM is a solid llama.cpp target for 12B-14B quantized coding models."
-          }
-        }
-      },
-      {
-        "when": { "engine": "llama.cpp", "totalRam": { "gte": 12 } },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-9B-GGUF",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5",
-            "source": "Hugging Face GGUF build",
-            "reason": "12GB-16GB budgets should stay in the 7B-9B class."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3.5-9B-GGUF",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5-Coder",
-            "source": "Hugging Face GGUF build",
-            "reason": "12GB-16GB budgets should stay in the 7B-9B class."
-          }
-        }
-      },
-      {
-        "when": { "engine": "llama.cpp" },
-        "value": {
-          "default": {
-            "name": "Qwen/Qwen3.5-4B-GGUF",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5",
-            "source": "Hugging Face GGUF build",
-            "reason": "Sub-12GB systems should stick to a 3B-4B local target."
-          },
-          "coding": {
-            "name": "Qwen/Qwen3.5-4B-GGUF",
-            "format": "GGUF Q4_K_M",
-            "family": "Qwen3.5-Coder",
-            "source": "Hugging Face GGUF build",
-            "reason": "Sub-12GB systems should stick to a 3B-4B local target."
-          }
-        }
-      }
-    ],
+    "model": [],
     "context": [
       {
-        "when": { "engine": "vllm", "effectiveMemory": { "gte": 48 } },
+        "when": {
+          "engine": "vllm",
+          "isNvidia": true,
+          "vram": {
+            "gte": 20
+          },
+          "totalRam": {
+            "gte": 96
+          }
+        },
         "value": 32768
       },
       {
-        "when": { "engine": "vllm", "vram": { "gte": 20 } },
+        "when": {
+          "engine": "vllm",
+          "effectiveMemory": {
+            "gte": 48
+          }
+        },
+        "value": 32768
+      },
+      {
+        "when": {
+          "engine": "vllm",
+          "vram": {
+            "gte": 20
+          }
+        },
         "value": 16384
       },
       {
-        "when": { "engine": "mlx", "totalRam": { "gte": 24 } },
+        "when": {
+          "engine": "mlx",
+          "totalRam": {
+            "gte": 24
+          }
+        },
         "value": 32768
       },
       {
-        "when": { "engine": "llama.cpp", "isPhone": true },
+        "when": {
+          "engine": "llama.cpp",
+          "isPhone": true
+        },
         "value": 8192
       },
       {
-        "when": { "effectiveMemory": { "gte": 16 } },
+        "when": {
+          "effectiveMemory": {
+            "gte": 16
+          }
+        },
         "value": 16384
       },
       {
@@ -650,62 +512,59 @@ The tool reads the JSON block below at runtime. Update this block when you want 
         "value": 8192
       }
     ],
-    "alternatives": [
-      {
-        "when": { "engine": "vllm", "vram": { "gte": 20 }, "useCase": "coding" },
-        "value": [
-          { "name": "Qwen/Qwen3.5-7B-Instruct", "format": "AWQ 4-bit", "source": "Hugging Face" },
-          { "name": "Qwen/Qwen3-Coder-7B", "format": "AWQ 4-bit", "source": "Hugging Face" }
-        ]
-      },
-      {
-        "when": { "engine": "vllm", "vram": { "gte": 20 } },
-        "value": [
-          { "name": "Qwen/Qwen3.5-7B-Instruct", "format": "AWQ 4-bit", "source": "Hugging Face" },
-          { "name": "0xSero/Qwen-3.5-28B-A3B-REAP", "format": "REAP pruned bf16 weights", "source": "0xSero on Hugging Face" }
-        ]
-      },
-      {
-        "when": { "engine": "llama.cpp", "totalRam": { "gte": 24 } },
-        "value": [
-          { "name": "Qwen/Qwen3.5-9B-GGUF", "format": "GGUF Q4_K_M", "source": "Hugging Face" },
-          { "name": "Qwen/Qwen3.5-7B-Instruct-GGUF", "format": "GGUF Q5_K_M", "source": "Hugging Face" }
-        ]
-      },
-      {
-        "when": { "engine": "mlx" },
-        "value": [
-          { "name": "Qwen/Qwen3.5-9B", "format": "MLX 4-bit", "source": "Hugging Face" },
-          { "name": "Qwen/Qwen3.5-14B", "format": "MLX 4-bit", "source": "Hugging Face" }
-        ]
-      },
-      {
-        "when": {},
-        "value": [
-          { "name": "Qwen/Qwen3.5-4B-GGUF", "format": "GGUF Q4_K_M", "source": "Hugging Face" },
-          { "name": "Qwen/Qwen3.5-9B-GGUF", "format": "GGUF Q4_K_M", "source": "Hugging Face" }
-        ]
-      }
-    ],
+    "alternatives": [],
     "notes": [
       {
-        "when": { "isWindows": true, "engine": ["vllm", "exllamav3"] },
+        "when": {
+          "isWindows": true,
+          "engine": [
+            "vllm",
+            "exllamav3"
+          ]
+        },
         "value": "Windows works, but Linux or WSL2 is still the cleaner NVIDIA runtime path."
       },
       {
-        "when": { "engine": "vllm", "effectiveMemory": { "gte": 48 } },
+        "when": {
+          "engine": "vllm",
+          "effectiveMemory": {
+            "gte": 48
+          }
+        },
         "value": "Use tensor parallel for multi-GPU or larger-memory vLLM serving."
       },
       {
-        "when": { "engine": "vllm", "vram": { "gte": 20 } },
-        "value": "Start with a conservative context and fixed sampling before testing larger models or longer windows."
+        "when": {
+          "engine": "vllm",
+          "isNvidia": true,
+          "totalRam": {
+            "gte": 96
+          },
+          "vram": {
+            "gte": 20
+          }
+        },
+        "value": "Discovery-first policy: select the highest-scoring Hugging Face candidate for this hardware, then surface uncensored and runtime-specific alternatives for benchmark comparison."
       },
       {
-        "when": { "engine": "llama.cpp" },
+        "when": {
+          "engine": "vllm",
+          "vram": {
+            "gte": 20
+          }
+        },
+        "value": "Start at 32K context on a 24GB 4090; reduce to 16K only if the server fails to start or benchmark latency is unacceptable."
+      },
+      {
+        "when": {
+          "engine": "llama.cpp"
+        },
         "value": "Keep context conservative on shared-memory or CPU-first devices."
       },
       {
-        "when": { "engine": "mlx" },
+        "when": {
+          "engine": "mlx"
+        },
         "value": "Leave headroom in unified memory for the OS and tools."
       }
     ]
