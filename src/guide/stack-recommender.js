@@ -994,10 +994,11 @@ function getGuideStackRecommendation(hardware = {}, options = {}) {
             runLabelReason: runLabel.reason
         };
     });
-    const topChoices = rankedCandidates.slice(0, Math.max(1, Number(options.topN) || 5));
+    const choiceLimit = Math.max(1, Number(options.topN) || 1);
+    const topChoices = rankedCandidates.slice(0, choiceLimit);
     const uncensoredChoices = rankedCandidates
         .filter((candidate) => matchesUncensoredFocus(candidate))
-        .slice(0, Math.max(1, Number(options.topN) || 5));
+        .slice(0, choiceLimit);
     const alternatives = topChoices.filter((item) => item.name !== model.name).slice(0, 4);
     const notes = buildNotes(policy, selectionContext);
     const frontierComparison = buildFrontierComparison(model, selectionContext);

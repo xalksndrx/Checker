@@ -25,9 +25,6 @@ That single run prints:
 - engine
 - harness
 - primary Hugging Face model
-- top ranked 3-5 model choices for each lane
-- best uncensored / abliterated / heretic choices when discovered
-- run labels such as `confirmed`, `likely`, `experimental`, or `format mismatch`
 - tradeoff notes for quality, speed, fit, and context headroom
 - estimated `tok/s`
 - estimated first-token latency
@@ -82,19 +79,13 @@ node bin/checker.js --use-case coding \
   --model https://huggingface.co/org/model-two
 ```
 
-Limit the recommendation list:
-
-```bash
-node bin/checker.js --top 5
-```
-
 That comparison mode:
 
 - fetches Hugging Face repo metadata when possible
 - estimates parameter count and working-set size
 - checks fit against the detected hardware
 - ranks the provided models using the same Checker fit logic
-- prints context and performance tradeoffs for the compared set
+- prints the best selected model with context and performance tradeoffs
 - does not rewrite `install.md`
 
 ## How It Works
@@ -124,7 +115,6 @@ Current CLI options:
 --cpu <model>          Simulate a custom CPU
 --vram <gb>            Override GPU VRAM in GB
 --use-case <name>      Evaluate for general, coding, or agentic
---top <n>              Show top ranked choices (default: 5, max: 10)
 --model <id-or-url>    Evaluate an explicit model candidate (repeatable)
 --models <list>        Comma-separated explicit model IDs or HF URLs
 --no-verbose           Disable step-by-step progress
@@ -146,7 +136,5 @@ Every run rewrites [`install.md`](./install.md) with:
 - install command
 - model fetch command
 - serve command
-- top ranked alternatives
-- run-suitability labels
 - tradeoff summaries
 - sections for `agentic`, `coding`, and `general`

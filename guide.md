@@ -544,7 +544,7 @@ The tool reads the JSON block below at runtime. Update this block when you want 
             "gte": 20
           }
         },
-        "value": "Discovery-first policy: select the highest-scoring Hugging Face candidate for this hardware, then surface uncensored and runtime-specific alternatives for benchmark comparison."
+        "value": "Discovery-first policy: select the highest-scoring Hugging Face candidate for this hardware and present it as the single recommended lane."
       },
       {
         "when": {

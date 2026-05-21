@@ -11,7 +11,6 @@ const {
 } = require('../src/guide/stack-recommender');
 
 const INSTALL_MD_PATH = path.join(process.cwd(), 'install.md');
-const DEFAULT_TOP_N = 5;
 const HF_DISCOVERY_LIMIT = 100;
 const HF_DISCOVERY_MAX_CANDIDATES = 600;
 const HF_DISCOVERY_METADATA_LIMIT = 160;
@@ -29,7 +28,6 @@ function parseArgs(argv = []) {
         cpu: null,
         vram: null,
         useCase: 'general',
-        topN: DEFAULT_TOP_N,
         models: [],
         help: false,
         version: false
@@ -81,14 +79,6 @@ function parseArgs(argv = []) {
             index += 1;
             continue;
         }
-        if (arg === '--top' && next) {
-            const parsed = Number(next);
-            if (Number.isFinite(parsed) && parsed > 0) {
-                options.topN = Math.max(1, Math.min(10, Math.round(parsed)));
-            }
-            index += 1;
-            continue;
-        }
         if ((arg === '--model' || arg === '--models') && next) {
             next.split(',').map((item) => item.trim()).filter(Boolean).forEach((item) => options.models.push(item));
             index += 1;
@@ -111,7 +101,6 @@ Options:
   --cpu <model>          Simulate a custom CPU
   --vram <gb>            Override GPU VRAM in GB
   --use-case <name>      Evaluate for general, coding, or agentic
-  --top <n>              Show top ranked choices (default: 5, max: 10)
   --model <id-or-url>    Evaluate an explicit model candidate (repeatable)
   --models <list>        Comma-separated explicit model IDs or HF URLs
   --no-verbose           Disable step-by-step progress
@@ -206,23 +195,6 @@ function displayRecommendation(recommendation) {
     [recommendation.frontierComparison.summary, ...recommendation.notes].slice(0, 2).forEach((line) => {
         console.log(chalk.green('│') + ` Note: ${chalk.gray(line)}`);
     });
-    (recommendation.topChoices || []).slice(0, 5).forEach((candidate, index) => {
-        console.log(chalk.green('│') + ` Top ${index + 1}: ${chalk.white(candidate.name)}`);
-        console.log(chalk.green('│') + `        ${chalk.gray(formatCandidateHeadline(candidate))}`);
-        console.log(
-            chalk.green('│') +
-            `        ${chalk.gray(`~${candidate.performance.tokensPerSecond} tok/s | first token ~${candidate.performance.firstTokenSeconds}s | context ~${candidate.contextWindow} | ${candidate.tradeoff}`)}`
-        );
-        if (candidate.runLabelReason) {
-            console.log(chalk.green('│') + `        ${chalk.gray(`Label: ${candidate.runLabel} | ${candidate.runLabelReason}`)}`);
-        }
-    });
-    if ((recommendation.uncensoredChoices || []).length > 0) {
-        (recommendation.uncensoredChoices || []).slice(0, 5).forEach((candidate, index) => {
-            console.log(chalk.green('│') + ` Uncensored ${index + 1}: ${chalk.white(candidate.name)}`);
-            console.log(chalk.green('│') + `        ${chalk.gray(formatCandidateHeadline(candidate))}`);
-        });
-    }
     console.log(chalk.green('╰'));
 }
 
@@ -237,24 +209,21 @@ function displayModelComparison(result) {
         console.log(chalk.magenta('│') + ` Best choice: ${chalk.white.bold(result.selected.name)}`);
         console.log(chalk.magenta('│') + ` Why: ${chalk.gray(`${result.selected.format} | score ${result.selected.score} | fit ${result.selected.fitLabel} | ${result.selected.runLabel || 'unlabeled'} | context ~${result.selected.contextWindow}`)}`);
     }
-    result.rankedCandidates.forEach((candidate, index) => {
-        console.log(chalk.magenta('│') + ` ${index + 1}. ${chalk.white(candidate.name)}`);
-        console.log(chalk.magenta('│') + `    ${chalk.gray(formatCandidateHeadline(candidate))}`);
-        console.log(chalk.magenta('│') + `    ${chalk.gray(`~${candidate.performance.tokensPerSecond} tok/s | first token ~${candidate.performance.firstTokenSeconds}s | context ~${candidate.contextWindow} | ${candidate.tradeoff}`)}`);
-        if (candidate.runLabelReason) {
-            console.log(chalk.magenta('│') + `    ${chalk.gray(`Label: ${candidate.runLabel} | ${candidate.runLabelReason}`)}`);
+    if (result.selected) {
+        console.log(chalk.magenta('│') + ` Detail: ${chalk.gray(formatCandidateHeadline(result.selected))}`);
+        console.log(chalk.magenta('│') + ` Perf: ${chalk.gray(`~${result.selected.performance.tokensPerSecond} tok/s | first token ~${result.selected.performance.firstTokenSeconds}s | ${result.selected.tradeoff}`)}`);
+        if (result.selected.runLabelReason) {
+            console.log(chalk.magenta('│') + ` Label: ${chalk.gray(`${result.selected.runLabel} | ${result.selected.runLabelReason}`)}`);
         }
-        if (Array.isArray(candidate.cautionFlags) && candidate.cautionFlags.length > 0) {
-            console.log(chalk.magenta('│') + `    ${chalk.yellow(`Flags: ${candidate.cautionFlags.join(', ')}`)}`);
+        if (Array.isArray(result.selected.cautionFlags) && result.selected.cautionFlags.length > 0) {
+            console.log(chalk.magenta('│') + ` Flags: ${chalk.yellow(result.selected.cautionFlags.join(', '))}`);
         }
-    });
+    }
     console.log(chalk.magenta('╰'));
 }
 
 function writeInstallMarkdown(recommendations = []) {
     const content = recommendations.map((recommendation) => {
-        const topChoices = recommendation.topChoices || [];
-        const uncensoredChoices = recommendation.uncensoredChoices || [];
         return [
             `## ${recommendation.useCase}`,
             '',
@@ -286,23 +255,7 @@ function writeInstallMarkdown(recommendations = []) {
             '',
             'Comparison note:',
             `- ${recommendation.frontierComparison.summary}`,
-            `- ${recommendation.frontierComparison.inference}`,
-            '',
-            topChoices.length > 0 ? 'Top choices:' : '',
-            ...topChoices.slice(0, 5).map((item, index) =>
-                `- ${index + 1}. ${item.name} (${item.format}, ${item.runLabel || 'unlabeled'}, score ${item.score}, fit ${item.fitLabel}, ~${item.performance.tokensPerSecond} tok/s, context ~${item.contextWindow})`
-            ),
-            '',
-            topChoices.length > 0 ? 'Tradeoffs:' : '',
-            ...topChoices.slice(0, 5).map((item) => `- ${item.name}: ${item.tradeoff}`),
-            '',
-            topChoices.length > 0 ? 'Run labels:' : '',
-            ...topChoices.slice(0, 5).map((item) => `- ${item.name}: ${item.runLabel || 'unlabeled'}${item.runLabelReason ? ` - ${item.runLabelReason}` : ''}`),
-            '',
-            uncensoredChoices.length > 0 ? 'Best uncensored / abliterated / heretic choices:' : '',
-            ...uncensoredChoices.slice(0, 5).map((item, index) =>
-                `- ${index + 1}. ${item.name} (${item.format}, ${item.runLabel || 'unlabeled'}, score ${item.score}, fit ${item.fitLabel}, ~${item.performance.tokensPerSecond} tok/s, context ~${item.contextWindow})`
-            )
+            `- ${recommendation.frontierComparison.inference}`
         ].filter(Boolean).join('\n');
     }).join('\n\n');
 
@@ -734,8 +687,8 @@ async function main() {
     const hardware = await checker.getSystemInfo();
     if (options.models.length > 0) {
         const fetchedModels = await Promise.all(options.models.map(fetchModelMetadata));
-        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: options.topN });
-        comparison.rankedCandidates = comparison.rankedCandidates.slice(0, options.topN);
+        const comparison = rankExplicitModelCandidates(hardware, fetchedModels, { useCase: options.useCase, topN: 1 });
+        comparison.rankedCandidates = comparison.rankedCandidates.slice(0, 1);
         comparison.selected = comparison.rankedCandidates[0] || comparison.selected;
 
         if (!options.verbose) {
@@ -751,7 +704,7 @@ async function main() {
         const discoveredModels = await discoverCandidateModels(hardware, { useCase });
         return getGuideStackRecommendation(hardware, {
             useCase,
-            topN: options.topN,
+            topN: 1,
             discoveredModels
         });
     }));
