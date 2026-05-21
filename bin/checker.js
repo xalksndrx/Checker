@@ -222,8 +222,54 @@ function displayModelComparison(result) {
     console.log(chalk.magenta('╰'));
 }
 
+function buildDownloadWorkflowMarkdown() {
+    return [
+        '# Install Plan',
+        '',
+        '## Model download workflow',
+        '',
+        'Use the modern Hugging Face CLI entrypoint for model downloads. Do not use `huggingface-cli download` for new runs.',
+        '',
+        'One-time Hugging Face auth:',
+        '```bash',
+        'hf auth login',
+        'hf auth whoami',
+        '```',
+        '',
+        'Run long downloads inside `tmux` so they survive terminal disconnects:',
+        '```bash',
+        'tmux new-session -s modeldl',
+        '# run the model-specific hf download command from the relevant section below',
+        '# detach with Ctrl-b then d',
+        'tmux attach -t modeldl',
+        '```',
+        '',
+        'Download and resume rules:',
+        '',
+        '- Use `hf download "<model>" --local-dir "<model-dir>"`.',
+        '- Re-run the exact same `hf download` command to resume partial downloads.',
+        '- Keep existing `.incomplete` files unless you intentionally want to restart from zero.',
+        '- Prefer authenticated downloads for large model shards because anonymous Hub downloads can be slower and less reliable.'
+    ].join('\n');
+}
+
+function buildProgressCheckMarkdown(modelPath) {
+    if (!modelPath) return '';
+
+    return [
+        'Progress check:',
+        '```bash',
+        `export MODEL_DIR="${modelPath}"`,
+        'watch -n 5 \'du -sh "$MODEL_DIR"\'',
+        'watch -n 5 \'find "$MODEL_DIR/.cache/huggingface/download" -maxdepth 1 -type f -name "*.incomplete" -printf "%f %s\\n" 2>/dev/null | sort\'',
+        '```'
+    ].join('\n');
+}
+
 function writeInstallMarkdown(recommendations = []) {
-    const content = recommendations.map((recommendation) => {
+    const sections = recommendations.map((recommendation) => {
+        const progressCheck = buildProgressCheckMarkdown(recommendation.commands.modelPath);
+
         return [
             `## ${recommendation.useCase}`,
             '',
@@ -250,6 +296,8 @@ function writeInstallMarkdown(recommendations = []) {
             `# ${recommendation.commands.attach}`,
             '```',
             '',
+            progressCheck,
+            '',
             'Why this pick:',
             ...recommendation.rationale.slice(0, 4).map((line) => `- ${line}`),
             '',
@@ -258,6 +306,11 @@ function writeInstallMarkdown(recommendations = []) {
             `- ${recommendation.frontierComparison.inference}`
         ].filter(Boolean).join('\n');
     }).join('\n\n');
+
+    const content = [
+        buildDownloadWorkflowMarkdown(),
+        sections
+    ].filter(Boolean).join('\n\n');
 
     fs.writeFileSync(INSTALL_MD_PATH, `${content}\n`, 'utf8');
 }

@@ -191,6 +191,15 @@ function slugifyFamily(text = '') {
         .replace(/^-+|-+$/g, '') || 'model';
 }
 
+function slugifyModelDirectory(text = '') {
+    return String(text || 'model')
+        .trim()
+        .replace(/[\\/]+/g, '-')
+        .replace(/[^A-Za-z0-9._-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'model';
+}
+
 function getRuntimeModelRef(model = {}) {
     const name = model.name || '';
     const format = String(model.format || '');
@@ -202,11 +211,14 @@ function getRuntimeModelRef(model = {}) {
 }
 
 function fillTemplate(template, model = {}, harness = {}) {
+    const modelDir = slugifyModelDirectory(model.name || model.family || 'model');
     const values = {
         model: model.name || '',
         modelRef: getRuntimeModelRef(model),
         family: model.family || 'model',
         familySlug: slugifyFamily(model.family || 'model'),
+        modelDir,
+        modelPath: `../models/${modelDir}`,
         modelFile: slugifyFamily(model.family || 'model'),
         harness: harness.name || ''
     };
@@ -337,6 +349,8 @@ function buildCommands(policy = {}, engine = {}, model = {}, harness = {}) {
         install: fillTemplate(commandTemplates.install || '', model, harness),
         fetch: fillTemplate(commandTemplates.fetch || '', model, harness),
         serve: fillTemplate(commandTemplates.serve || '', model, harness),
+        modelDir: fillTemplate('{{modelDir}}', model, harness),
+        modelPath: fillTemplate('{{modelPath}}', model, harness),
         attach: `${harness.name} -> ${engine.key === 'mlx' ? 'local MLX bridge or OpenAI-compatible adapter' : 'http://localhost:8000/v1'}`
     };
 }

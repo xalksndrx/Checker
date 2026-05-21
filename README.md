@@ -130,11 +130,15 @@ The printed `tok/s`, first-token latency, and context window are heuristic estim
 
 Every run rewrites [`install.md`](./install.md) with:
 
+- Hugging Face auth notes
+- `hf download --local-dir` model fetch commands
+- `tmux` instructions for long downloads
+- resume and `.incomplete` download-cache notes
+- progress-check commands
 - engine link
 - harness link
 - model link
 - install command
-- model fetch command
 - serve command
 - tradeoff summaries
 - sections for `agentic`, `coding`, and `general`

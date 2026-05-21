@@ -292,8 +292,8 @@ The tool reads the JSON block below at runtime. Update this block when you want 
       "link": "https://github.com/vllm-project/vllm",
       "commands": {
         "install": "pip install -U \"vllm>=0.15.0\"",
-        "fetch": "huggingface-cli download \"{{model}}\"",
-        "serve": "vllm serve \"{{model}}\" --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.92"
+        "fetch": "hf download \"{{model}}\" --local-dir \"{{modelPath}}\"",
+        "serve": "vllm serve \"{{modelPath}}\" --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.92"
       }
     },
     "llama.cpp": {
@@ -304,7 +304,7 @@ The tool reads the JSON block below at runtime. Update this block when you want 
       "link": "https://github.com/ggml-org/llama.cpp",
       "commands": {
         "install": "Build or install llama.cpp with CUDA server support",
-        "fetch": "huggingface-cli download \"{{model}}\"",
+        "fetch": "hf download \"{{model}}\" --local-dir \"{{modelPath}}\"",
         "serve": "llama-server -hf \"{{modelRef}}\" --host 0.0.0.0 --port 8000"
       }
     },
@@ -328,8 +328,8 @@ The tool reads the JSON block below at runtime. Update this block when you want 
       "link": "https://github.com/turboderp-org/exllamav2",
       "commands": {
         "install": "Install exllamav3 in a dedicated environment",
-        "fetch": "huggingface-cli download \"{{model}}\"",
-        "serve": "Run your preferred exllamav3 OpenAI-compatible server wrapper on port 8000"
+        "fetch": "hf download \"{{model}}\" --local-dir \"{{modelPath}}\"",
+        "serve": "Run your preferred exllamav3 OpenAI-compatible server wrapper against \"{{modelPath}}\" on port 8000"
       }
     }
   },
